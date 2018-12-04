@@ -23,23 +23,24 @@ static GLdouble ProjectionMatrix[16];
 static GLint ViewportMatrix[4];
 
 /*CHARACTER PARAMETERS*/
-static float characterDiameter = 0.1;
+static float characterDiameter = 0.6;
 static float movementVector[3] = {0,0,0};
-static float movementSpeed = 0.06;
+static float movementSpeed = 0.1;
 static float diagonalMovementMultiplier = 0.707107;
 static int curWorldX, curWorldY;
 static int curMatX, curMatY;
 static GLdouble objWinX, objWinY, objWinZ;
 static bool keyBuffer[128];     
-
-float tmp1, tmp2;
+static int currentRotationX, currentRotationY;
+// static float gunBarrelX, gunBarrelY;
 
 static void greska(char* text);
 static void DecLevelInit();
 static void DecTest();
 
 static void characterMovement();
-static void characterShoot();
+static void fire();
+// static int shoot = 0;
 
 /*MOVEMENT FUNCTIONS*/
 static void moveLeft();
@@ -157,12 +158,19 @@ static void on_display(void)
                &objWinX, &objWinY, &objWinZ);
     
     
+    /*Racunanje rotacije*/
+    currentRotationX = tempX - ((int)objWinX-window_width/2);
+    currentRotationY = tempY - ((int)objWinY-window_height/2); 
+    
+    fire();
+    
     glTranslatef(movementVector[0], 1, movementVector[2]);
-
-    glRotatef(atan2(tempX - ((int)objWinX-window_width/2), tempY - ((int)objWinY-window_height/2))*(-180)/M_PI, 0, 1, 0);
+    glRotatef(atan2(currentRotationX, currentRotationY)*(-180)/M_PI, 0, 1, 0);
     
     /*Inicijalicazija podloge i nivoa*/
     /*Character main*/
+    
+    
     
     /*Gornja lopta*/
     glPushMatrix();
@@ -190,7 +198,7 @@ static void on_display(void)
     glPushMatrix();
         glDisable(GL_LIGHTING);
         glColor3f(0,0,0);
-        glScalef(0.3,.2,0.7);
+        glScalef(0.3,0.2,0.7);
         glTranslatef(1, 4, -1);
         glutSolidCube(1);
         glEnable(GL_LIGHTING);
@@ -299,9 +307,9 @@ static void moveDownRight(){
 
 //-------------------------K O N T R O L A   K R E T A N J A-------------------------
 void characterMovement(){
-/*
-    float tmp1;
-    float tmp2;    */
+    
+    int wa, wd;
+    float localX, localY;
     
     /*Racunanje koordinata polja u kojem se nalazimo u prostoru:*/
     /*Za X osu*/
@@ -324,14 +332,20 @@ void characterMovement(){
     curMatY = curWorldY/2 + matrixSizeY/2;
     
     /*Racunanje decimalnog dela pozicije lika*/
-//     tmp1 = (movementVector[0] < 0) ? fmod(fabs(movementVector[0]),1) : fmod(movementVector[0],1);
-//     tmp1 = tmp1;
-//     tmp2 = (movementVector[2] < 0) ? fmod(fabs(movementVector[2]),1) : fmod(movementVector[2],1);
-//     tmp2 = fabs(1.0 - tmp2);
     
+    localX = fmod(movementVector[0] + 1.0, 2);
+    if (localX < 0.0) localX = 2.0 + localX;
+    localY = fmod((1.0 - movementVector[2]), 2);
+    if (localY < 0.0) localY = 2.0 + localY;
     
-//     float a1,a2,b1,b2,c1,c2;
+    if (localX + localY >= 2.0)
+        wa = 1;
+    else wa = 0;
     
+    if ((2.0 - localX) + localY >= 2.0)
+        wd = 1;
+    else wd = 0;
+
     
 //------------detekcija kolizije za ivice terena------------------
     if (movementVector[2] < (-1)*(matrixSizeY-1))
@@ -344,36 +358,7 @@ void characterMovement(){
         keyBuffer[115] = false;
                    
 //---------------detekcija kolizije za prepreke------------------
-
-//     /*w+a*/
-//     if (keyBuffer[119] && keyBuffer[97]){
-//         if (curMatX-1 >= 0 && curMatY-1 >= 0){
-//             if (M[curMatX-1][curMatY-1] == 1){
-//                 if (!(movementVector[0] < curWorldX - 0.3 && movementVector[2] < curWorldY - 0.3))
-//                     moveUpLeft();
-//                 else {
-//                     if (tmp1 + tmp2 < 0.7)
-//                         moveLeft();
-//                     if (tmp1 + tmp2 >= 0.7)
-//                         moveUp();
-//                 }
-//             }
-//             else if (M[curMatX-1][curMatY] == 1){
-//                 if (movementVector[0] > curWorldX - 0.3)
-//                     moveUpLeft();
-//                 else moveUp();
-//             }
-//             else if (M[curMatX][curMatY-1] == 1){
-//                 if (movementVector[2] > curWorldY - 0.3)
-//                     moveUpLeft();
-//                 else moveLeft();
-//             }
-//             else moveUpLeft();
-//         } else moveUpLeft();
-//     }
-    
- //TODO: skretanje pri ivici gore-levo
- /*w+a*/
+    /*w+a*/
     if (keyBuffer[119] && keyBuffer[97]){
         if (curMatX-1 >= 0 && curMatY-1 >= 0){
             if (M[curMatX-1][curMatY] == 1){
@@ -399,90 +384,121 @@ void characterMovement(){
                 else if (M[curMatX-1][curMatY-1] == 1){
                     if (!(movementVector[0] < curWorldX - 0.4 && movementVector[2] < curWorldY - 0.4))
                         moveUpLeft();
-
+                    else {
+                        if (wa == 1) moveUp();
+                        else if (wa == 0) moveLeft();
+                    }
                 }
- 
             else moveUpLeft();
-        }  
+        }
         else moveUpLeft();
     }
     /*w+d*/
-    else if (keyBuffer[119] && keyBuffer[100]){
+    else if (keyBuffer[119] && keyBuffer[100]){     
         if (curMatX+1 < matrixSizeX && curMatY-1 >= 0){
-            if (M[curMatX+1][curMatY-1] == 1){
-                if (!(movementVector[0] > curWorldX + 0.4 && movementVector[2] < curWorldY - 0.4))
-                    moveUpRight();
-                else if (tmp1 + tmp2 < 0.8){
-                    moveRight();
+            if (M[curMatX+1][curMatY] == 1){
+                if ((M[curMatX][curMatY-1] == 1 && M[curMatX+1][curMatY-1] == 1) || (M[curMatX][curMatY-1] == 1 && M[curMatX+1][curMatY-1] == 0)){
+                    if (movementVector[0] < curWorldX + 0.4 && movementVector[2] > curWorldY - 0.4)
+                        moveUpRight();
+                    else if (movementVector[0] >= curWorldX + 0.4 && movementVector[2] > curWorldY - 0.4)
+                        moveUp();
+                    else if (movementVector[0] < curWorldX + 0.4 && movementVector[2] <= curWorldY - 0.4)
+                        moveRight();
+                    }
+                    else {
+                        if (movementVector[0] < curWorldX + 0.4)
+                            moveUpRight();
+                        else moveUp();
+                    }
                 }
-                else {
-                    moveUp();
+                else if (M[curMatX][curMatY-1] == 1){
+                    if (movementVector[2] > curWorldY - 0.4)
+                        moveUpRight();
+                    else moveRight();
                 }
-            }
-            else if (M[curMatX+1][curMatY] == 1){
-                if (movementVector[0] < curWorldX + 0.4)
-                    moveUpRight();
-                else moveUp();
-            }
-            else if (M[curMatX][curMatY-1] == 1){
-                if (movementVector[2] > curWorldY - 0.4)
-                    moveUpRight();
-                else moveRight();
-            }
+                else if (M[curMatX+1][curMatY-1] == 1){
+                    
+                    if (!(movementVector[0] > curWorldX + 0.4 && movementVector[2] < curWorldY - 0.4))
+                        moveUpRight();
+                    else {
+                        if (wd == 1) moveUp();
+                        else if (wd == 0) moveRight();
+                    }
+                }
             else moveUpRight();
-        } else moveUpRight();
+        }  
+        else moveUpRight();
     }
     /*s+a*/
     else if (keyBuffer[115] && keyBuffer[97]){
         if (curMatX-1 >= 0 && curMatY+1 < matrixSizeY){
-            if (M[curMatX-1][curMatY+1] == 1){
-                if (!(movementVector[0] < curWorldX - 0.4 && movementVector[2] > curWorldY + 0.4))
-                    moveDownLeft();
-                else if (tmp1 + tmp2 < 0.8){
-                    moveLeft();
+            if (M[curMatX-1][curMatY] == 1){
+                if ((M[curMatX][curMatY+1] == 1 && M[curMatX-1][curMatY+1] == 1) || (M[curMatX][curMatY+1] == 1 && M[curMatX-1][curMatY+1] == 0)){
+                    if (movementVector[0] > curWorldX - 0.4 && movementVector[2] < curWorldY + 0.4)
+                        moveDownLeft();
+                    else if (movementVector[0] <= curWorldX - 0.4 && movementVector[2] < curWorldY + 0.4)
+                        moveDown();
+                    else if (movementVector[0] > curWorldX - 0.4 && movementVector[2] <= curWorldY - 0.4)
+                        moveLeft();
+                    }
+                    else {
+                        if (movementVector[0] > curWorldX - 0.4)
+                            moveDownLeft();
+                        else moveDown();
+                    }
                 }
-                else {
-                    moveDown();
+                else if (M[curMatX][curMatY+1] == 1){
+                    if (movementVector[2] < curWorldY + 0.4)
+                        moveDownLeft();
+                    else moveLeft();
                 }
-            }
-            else if (M[curMatX-1][curMatY] == 1){
-                if (movementVector[0] > curWorldX - 0.4)
-                    moveDownLeft();
-                else moveDown();
-            }
-            else if (M[curMatX][curMatY+1] == 1){
-                if (movementVector[2] < curWorldY + 0.4)
-                    moveDownLeft();
-                else moveLeft();
-            }
+                else if (M[curMatX-1][curMatY+1] == 1){
+                    if (!(movementVector[0] < curWorldX - 0.4 && movementVector[2] > curWorldY + 0.4))
+                        moveDownLeft();
+                    else {
+                        if (wd == 0) moveDown();
+                        else if (wd == 1) moveLeft();
+                    }
+                }
             else moveDownLeft();
-        } else moveDownLeft();
+        }
+        else moveDownLeft();
     }
     /*s+d*/
     else if (keyBuffer[115] && keyBuffer[100]){
         if (curMatX+1 < matrixSizeX && curMatY+1 < matrixSizeY){
-            if (M[curMatX+1][curMatY+1] == 1){
-                if (!(movementVector[0] > curWorldX + 0.4 && movementVector[2] > curWorldY + 0.4))
-                    moveDownRight();
-                else if (tmp1 + tmp2 < 0.8){
-                    moveRight();
+            if (M[curMatX+1][curMatY] == 1){
+                if ((M[curMatX][curMatY+1] == 1 && M[curMatX+1][curMatY+1] == 1) || (M[curMatX][curMatY+1] == 1 && M[curMatX+1][curMatY+1] == 0)){
+                    if (movementVector[0] < curWorldX + 0.4 && movementVector[2] < curWorldY + 0.4)
+                        moveDownRight();
+                    else if (movementVector[0] >= curWorldX + 0.4 && movementVector[2] < curWorldY + 0.4)
+                        moveDown();
+                    else if (movementVector[0] < curWorldX + 0.4 && movementVector[2] <= curWorldY - 0.4)
+                        moveRight();
+                    }
+                    else {
+                        if (movementVector[0] < curWorldX + 0.4)
+                            moveDownRight();
+                        else moveDown();
+                    }
                 }
-                else {
-                    moveDown();
+                else if (M[curMatX][curMatY+1] == 1){
+                    if (movementVector[2] < curWorldY + 0.4)
+                        moveDownRight();
+                    else moveRight();
                 }
-            }
-            else if (M[curMatX+1][curMatY] == 1){
-                if (movementVector[0] < curWorldX + 0.4)
-                    moveDownRight();
-                else moveDown();
-            }
-            else if (M[curMatX][curMatY+1] == 1){
-                if (movementVector[2] < curWorldY + 0.4)
-                    moveDownRight();
-                else moveRight();
-            }
+                else if (M[curMatX+1][curMatY+1] == 1){
+                    
+                    if (!(movementVector[0] > curWorldX + 0.4 && movementVector[2] > curWorldY + 0.4))
+                        moveDownRight();
+                    else {
+                        if (wa == 0) moveDown();
+                        else if (wa == 1) moveRight();
+                    }
+                }
             else moveDownRight();
-        } else moveDownRight();
+        }  
+        else moveDownRight();
     }
     else {
         /*w*/
@@ -685,14 +701,26 @@ static void on_mouseMove(int x, int y){
 }
 
 static void on_mouseLeftClick(int button, int state, int x, int y){
-    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN)
-        characterShoot();
+    if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN){
+        fire();
+//         gunBarrelX = movementVector[0]+0.3;
+//         gunBarrelY = movementVector[2]-1.5;
+//         shoot = 1;
+//     shoot = 0;
+    }
 }
 //-------------------------F U N K C I J E   L I K O V A-------------------------------------------
 
-static void characterShoot(){
-    DecTest();
-    printf("(%f, %f) - (%d, %d) - (%d, %d)\n", movementVector[0], movementVector[2], curWorldX, curWorldY, curMatX, curMatY);
+static void fire(){
+//     DecTest();
+//     printf("(%f, %f) - (%d, %d) - (%d, %d)\n", movementVector[0], movementVector[2], curWorldX, curWorldY, curMatX, curMatY);
+//     if (shoot == 1){
+//         glPushMatrix();
+//             glColor3f(0,0,0);
+//             glTranslatef(gunBarrelX, 1, gunBarrelY);
+//             glutSolidSphere(0.2, 6, 6);
+//         glPopMatrix();
+//     }
 }
 
 
