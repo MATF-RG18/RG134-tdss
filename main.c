@@ -39,7 +39,7 @@ static void DecLevelInit();
 static void DecTest();
 
 static void characterMovement();
-static void fire();
+static void characterShoot();
 // static int shoot = 0;
 
 /*MOVEMENT FUNCTIONS*/
@@ -162,7 +162,6 @@ static void on_display(void)
     currentRotationX = tempX - ((int)objWinX-window_width/2);
     currentRotationY = tempY - ((int)objWinY-window_height/2); 
     
-    fire();
     
     glTranslatef(movementVector[0], 1, movementVector[2]);
     glRotatef(atan2(currentRotationX, currentRotationY)*(-180)/M_PI, 0, 1, 0);
@@ -331,8 +330,7 @@ void characterMovement(){
     curMatX = curWorldX/2 + matrixSizeX/2;
     curMatY = curWorldY/2 + matrixSizeY/2;
     
-    /*Racunanje decimalnog dela pozicije lika*/
-    
+    /*Izracunavanje za slucaj kada dijagonalno prilazimo prepreci, pa treba odluciti na koju ce nas stranu skrenuti*/
     localX = fmod(movementVector[0] + 1.0, 2);
     if (localX < 0.0) localX = 2.0 + localX;
     localY = fmod((1.0 - movementVector[2]), 2);
@@ -391,7 +389,26 @@ void characterMovement(){
                 }
             else moveUpLeft();
         }
-        else moveUpLeft();
+        else {
+            if (curMatX-1 < 0){
+                if (M[curMatX][curMatY-1] == 1){
+                        if (movementVector[2] > curWorldY - 0.4)
+                            moveUpLeft();
+                        else moveLeft();
+                }
+                else moveUpLeft();
+            }
+            else if (curMatY-1 < 0){ 
+                if (M[curMatX-1][curMatY] == 1){
+                    if (movementVector[0] > curWorldX - 0.4)
+                        moveUpLeft();
+                    else moveUp();
+                }
+                else moveUpLeft();
+            }
+            else
+                moveUpLeft();
+        }
     }
     /*w+d*/
     else if (keyBuffer[119] && keyBuffer[100]){     
@@ -427,7 +444,26 @@ void characterMovement(){
                 }
             else moveUpRight();
         }  
-        else moveUpRight();
+        else {
+            if (curMatX + 1 >= matrixSizeX){
+                if (M[curMatX][curMatY-1] == 1){
+                    if (movementVector[2] > curWorldY - 0.4)
+                        moveUpRight();
+                    else moveRight();
+                }
+                else moveUpRight();
+            } 
+            else if (curMatY - 1 < 0){
+                if (M[curMatX+1][curMatY] == 1) {
+                    if (movementVector[0] < curWorldX + 0.4)
+                        moveUpRight();
+                    else moveUp();
+                }
+                else moveUpRight();
+            }
+            else moveUpRight();
+        }
+
     }
     /*s+a*/
     else if (keyBuffer[115] && keyBuffer[97]){
@@ -462,7 +498,29 @@ void characterMovement(){
                 }
             else moveDownLeft();
         }
-        else moveDownLeft();
+        else {
+            if (curMatY+1 >= matrixSizeX && curMatX-1 < 0){
+                moveDownLeft();
+            }
+            else if (curMatY + 1 >= matrixSizeY) {
+                if (M[curMatX-1][curMatY] == 1){
+                        if (movementVector[0] > curWorldX - 0.4)
+                            moveDownLeft();
+                        else moveDown();
+                }
+                else moveDownLeft();
+            }
+            else if (curMatX - 1 < 0){
+                if (M[curMatX][curMatY+1] == 1){
+                    if (movementVector[2] < curWorldY + 0.4)
+                        moveDownLeft();
+                    else moveLeft();
+                }
+                else moveDownLeft();
+            }
+            else
+                moveDownLeft();
+        }
     }
     /*s+d*/
     else if (keyBuffer[115] && keyBuffer[100]){
@@ -498,8 +556,31 @@ void characterMovement(){
                 }
             else moveDownRight();
         }  
-        else moveDownRight();
+        else {
+            if (curMatY+1 >= matrixSizeY && curMatX+1 >= matrixSizeX){
+                moveDownRight();
+            }
+            else if (curMatY + 1 >= matrixSizeY) {
+                if (M[curMatX+1][curMatY] == 1){
+                        if (movementVector[0] < curWorldX + 0.4)
+                            moveDownRight();
+                        else moveDown();
+                }
+                else moveDownRight();
+            }
+            else if (curMatX + 1 >= matrixSizeX){
+                if (M[curMatX][curMatY+1] == 1){
+                    if (movementVector[2] < curWorldY + 0.4)
+                        moveDownRight();
+                    else moveRight();
+                }
+                else moveDownRight();
+            }
+            else
+                moveDownRight();
+        }
     }
+    /*w,a,s,d*/
     else {
         /*w*/
         if (keyBuffer[119]){
@@ -702,25 +783,14 @@ static void on_mouseMove(int x, int y){
 
 static void on_mouseLeftClick(int button, int state, int x, int y){
     if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN){
-        fire();
-//         gunBarrelX = movementVector[0]+0.3;
-//         gunBarrelY = movementVector[2]-1.5;
-//         shoot = 1;
-//     shoot = 0;
+        characterShoot();
     }
 }
 //-------------------------F U N K C I J E   L I K O V A-------------------------------------------
 
-static void fire(){
+static void characterShoot(){
 //     DecTest();
 //     printf("(%f, %f) - (%d, %d) - (%d, %d)\n", movementVector[0], movementVector[2], curWorldX, curWorldY, curMatX, curMatY);
-//     if (shoot == 1){
-//         glPushMatrix();
-//             glColor3f(0,0,0);
-//             glTranslatef(gunBarrelX, 1, gunBarrelY);
-//             glutSolidSphere(0.2, 6, 6);
-//         glPopMatrix();
-//     }
 }
 
 
