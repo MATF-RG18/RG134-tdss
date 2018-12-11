@@ -4,13 +4,16 @@
 #include<math.h>
 #include<time.h>
 #include<stdbool.h>
+#include <sys/types.h>
+#include <unistd.h>
 
+
+#define MAX_BULLETS_ON_SCREEN 10
 
 /*MAP PARAMETERS*/
 static float window_width = 1600, window_height = 900;
 static int matrixSizeX, matrixSizeY;
 static int tempX, tempY;
-static GLdouble bulletX, bulletY, bulletZ;
 static float gPlaneScaleX = 31, gPlaneScaleY = 31;
 static float obstacleChance = 0.08;
 static int **M;
@@ -24,15 +27,9 @@ static GLdouble ProjectionMatrix[16];
 static GLint ViewportMatrix[4];
 static bool notSetP = true;
 
-static float Pmat[4][4];
-static float MVmat[4][4];
-static float PMVmat[4][4];
-static GLdouble Mv[16];
-
 /*CHARACTER PARAMETERS*/
 static float characterDiameter = 0.6;
 static float movementVector[3] = {0,0,0};
-static float pomMovementVector[3] = {0,0,0};
 static float movementSpeed = 0.1;
 static float diagonalMovementMultiplier = 0.707107;
 static int curWorldX, curWorldY;
@@ -40,10 +37,7 @@ static int curMatX, curMatY;
 static GLdouble objWinX, objWinY, objWinZ;
 static bool keyBuffer[128];     
 static int currentRotationX, currentRotationY;
-static float gunBarrel[4] = {-0.25, 0.3, 1, 1};
-static float bulletStartingPoint[4];
-static int shoot = 0;
-static bool bulletSet = false;
+// static float gunBarrel[4] = {-0.25, 0.3, 1, 1};
 
 static void greska(char* text);
 static void DecLevelInit();
@@ -74,17 +68,28 @@ static void on_mouseLeftClick(int button, int state, int x, int y);
 void DecPlane(float colorR, float colorG, float colorB);
 void DecFloorMatrix(float colorR, float colorG, float colorB, float cubeHeight);
 
+typedef struct{
+    float bulletStartingPoint[3];
+    float bulletTraj[2];
+    float bulletTrajLength;
+    float bulletTrajNorm[2];
+    bool bulletSet;
+    bool getMovementVector;
+    float bulletVelocity;
+} bullet;
 
+static int bulletTracker = 0;
+static bullet bullets[MAX_BULLETS_ON_SCREEN];
 
-float bulletTraj[2];
-float bulletTrajLength;
-float bulletTrajNorm[2];
-float m = 0.0;
+static float maxBulletVelocity = 15.0;
+static float bulletSpeed = 0.25;
 
+static void bulletInit();
+static bool checkBulletColision(float localBulletX, float localBulletY);
 
 int main(int argc, char **argv)
 {
-    
+    printf("%d\n", getpid());
     /*Globalno svetlo*/
     GLfloat light_ambient[] = { 0, 0, 0, 1 };
     GLfloat light_diffuse[] = { 0.425, 0.415, 0.4, 1 };
@@ -99,6 +104,7 @@ int main(int argc, char **argv)
     glutInitWindowSize(window_width, window_height);
     glutInitWindowPosition(100, 100);
     glutCreateWindow("TDSS - Lvl 1");
+    glutSetCursor(GLUT_CURSOR_CROSSHAIR);
  
     /* Registruju se callback funkcije. */
     glutKeyboardFunc(on_keyPress);
@@ -123,6 +129,7 @@ int main(int argc, char **argv)
     glLightModelfv(GL_LIGHT_MODEL_AMBIENT, model_ambient);
     
     DecLevelInit();
+    bulletInit();
     //DecTest();
     
     /* Program ulazi u glavnu petlju. */
@@ -157,12 +164,9 @@ static void on_display(void)
     
 
     gluLookAt(0, (matrixSizeX+matrixSizeY)/0.85, (matrixSizeX+matrixSizeY)/3, //Sa pozicijom kamere se jos uvek igram
-              0, 0, 0, 
+              0, 0, 0.5, 
               0, 1, 0);
-    
-//     glLightfv(GL_LIGHT0, GL_POSITION, lightPosition);
 
-    
     
     DecPlane(0.1, 0.1, 0.1);
     DecFloorMatrix(0.9, 0.9, 0.9, 2);
@@ -174,12 +178,6 @@ static void on_display(void)
     glGetDoublev(GL_MODELVIEW_MATRIX, ModelMatrix);
     if (notSetP){
         glGetDoublev(GL_PROJECTION_MATRIX, ProjectionMatrix);
-        for (int i=0; i!=4; i++){
-            Pmat[0][i] = ProjectionMatrix[i*4];
-            Pmat[1][i] = ProjectionMatrix[i*4+1];
-            Pmat[2][i] = ProjectionMatrix[i*4+2];
-            Pmat[3][i] = ProjectionMatrix[i*4+3]; 
-        }
         notSetP = false;
     }
     glGetIntegerv(GL_VIEWPORT, ViewportMatrix);
@@ -194,119 +192,58 @@ static void on_display(void)
     currentRotationY = tempY - ((int)objWinY-window_height/2); 
 
     /*Pocetna pozicija metka*/
-    if (bulletSet){
-        m += 0.25;
-        glPushMatrix();
-            glTranslatef(bulletStartingPoint[0] + m*bulletTrajNorm[0], bulletStartingPoint[1], bulletStartingPoint[2] + m*bulletTrajNorm[1]);
-            glutSolidSphere(0.2, 5, 5);
-        glPopMatrix();
-        if (m >= 15.0){
-            bulletSet = false;
-            m = 0.0;
+    for (int i=0; i!=MAX_BULLETS_ON_SCREEN; i++){
+        float localBulletX, localBulletY, localBulletZ;
+        if (bullets[i].bulletSet){
+            bullets[i].bulletVelocity += bulletSpeed;
+            
+            if (bullets[i].getMovementVector){
+                bullets[i].bulletStartingPoint[0] = movementVector[0];
+                bullets[i].bulletStartingPoint[1] = 1.0;
+                bullets[i].bulletStartingPoint[2] = movementVector[2];
+                
+                bullets[i].bulletTrajLength = sqrt(currentRotationX*currentRotationX + currentRotationY*currentRotationY);
+                bullets[i].bulletTrajNorm[0] = currentRotationX / bullets[i].bulletTrajLength;
+                bullets[i].bulletTrajNorm[1] = -currentRotationY / bullets[i].bulletTrajLength;
+                bullets[i].getMovementVector = false;
+            }
+            
+            localBulletX = bullets[i].bulletStartingPoint[0] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[0];
+            localBulletY = bullets[i].bulletStartingPoint[1];
+            localBulletZ = bullets[i].bulletStartingPoint[2] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[1];
+            
+            glPushMatrix();
+                glTranslatef(localBulletX, localBulletY, localBulletZ);
+                glutSolidSphere(0.2, 5, 5);
+            glPopMatrix();
+            if (bullets[i].bulletVelocity >= maxBulletVelocity || checkBulletColision(localBulletX, localBulletZ)){
+                bullets[i].bulletSet = false;
+                bullets[i].bulletVelocity = 1.0;
+            }
         }
     }
     
     
     glTranslatef(movementVector[0], 1, movementVector[2]);
     glRotatef(atan2(currentRotationX, currentRotationY)*(-180)/M_PI, 0, 1, 0);
-    
-    /*Ovo se desi kad kliknemo levi taster na misu*/
-    if (shoot == 1){
-        /*Kupimo vrednosti POJECTION i MODELVIEW matrica*/
-        
-        gluProject(bulletStartingPoint[0], bulletStartingPoint[1], bulletStartingPoint[2],
-            ModelMatrix, ProjectionMatrix, ViewportMatrix,
-            &bulletX, &bulletY, &bulletZ);
-        
-        bulletX -= window_width/2;
-        bulletY -= window_height/2;
-        
-        bulletTraj[0] = (float)tempX - bulletX;
-        bulletTraj[1] = -((float)tempY - bulletY);
-        
-        bulletTrajLength = sqrt((bulletTraj[0]*bulletTraj[0]) + (bulletTraj[1]*bulletTraj[1]));
-        
-        bulletTrajNorm[0] = bulletTraj[0] / bulletTrajLength;
-        bulletTrajNorm[1] = bulletTraj[1] / bulletTrajLength;
-        
-        printf("(%d, %d) - (%f, %f) - (%f, %f) - %f\n", tempX, tempY, bulletX, bulletY, bulletTrajNorm[0], bulletTrajNorm[1], bulletTrajLength);
-        
-        glGetDoublev(GL_MODELVIEW_MATRIX, Mv);
-        
-        /*Pretvaramo ih iz niza u matricu*/
-        for (int i=0; i!=4; i++){
-            MVmat[0][i] = Mv[i*4];
-            MVmat[1][i] = Mv[i*4+1];
-            MVmat[2][i] = Mv[i*4+2];
-            MVmat[3][i] = Mv[i*4+3]; 
-        }
-        
-        /*Racunamo P * M*/
-        for (int j = 0; j!=4; j++){
-            PMVmat[0][j] = Pmat[0][0]*MVmat[0][j]
-                          +Pmat[0][1]*MVmat[1][j]
-                          +Pmat[0][2]*MVmat[2][j]
-                          +Pmat[0][3]*MVmat[3][j];
-        
-            PMVmat[1][j] = Pmat[1][0]*MVmat[0][j] 
-                          +Pmat[1][1]*MVmat[1][j] 
-                          +Pmat[1][2]*MVmat[2][j] 
-                          +Pmat[1][3]*MVmat[3][j];
-        
-            PMVmat[2][j] = Pmat[2][0]*MVmat[0][j]
-                          +Pmat[2][1]*MVmat[1][j]
-                          +Pmat[2][2]*MVmat[2][j]
-                          +Pmat[2][3]*MVmat[3][j];
-        
-            PMVmat[3][j] = Pmat[3][0]*MVmat[0][j]
-                          +Pmat[3][1]*MVmat[1][j]
-                          +Pmat[3][2]*MVmat[2][j]
-                          +Pmat[3][3]*MVmat[3][j];
-        }
-        
-        /*Racunamo pocetnu tacku metka*/
-        for (int i=0; i!=4; i++){
-            bulletStartingPoint[i] = PMVmat[0][i] * gunBarrel[0]
-                                    +PMVmat[1][i] * gunBarrel[1]
-                                    +PMVmat[2][i] * gunBarrel[2]
-                                    +PMVmat[3][i] * gunBarrel[3];
-        }
-        
-        pomMovementVector[0] = movementVector[0];
-        pomMovementVector[1] = movementVector[1];
-        pomMovementVector[2] = movementVector[2];
-        
-        bulletStartingPoint[0] = -bulletStartingPoint[0] + pomMovementVector[0];
-        bulletStartingPoint[1] = 2;
-        bulletStartingPoint[2] = bulletStartingPoint[2] + pomMovementVector[2];
-         
-        
-        shoot = 0;
-        bulletSet = true;
-    }
 
-    
-    
     /*Inicijalicazija podloge i nivoa*/
     /*Character main*/
     
     /*Gornja lopta*/
     glPushMatrix();
-//         glColor3f(0,0,0);
         glTranslatef(0, 0.1, 0);
         glRotatef(90, 1, 0, 0);
         glutSolidSphere(characterDiameter, 20, 20);
     glPopMatrix();
     /*Cilindar*/
     glPushMatrix();
-//         glColor3f(0,0,0);
         glTranslatef(0, 1.05, 0);
         glRotatef(90, 1, 0, 0);
         gluCylinder(gluNewQuadric(), characterDiameter, characterDiameter, 1, 20, 1);
     glPopMatrix();
     /*Donja lopta*/
     glPushMatrix();
-//         glColor3f(0,0,0);
         glTranslatef(0, 1, 0);
         glRotatef(90, 1, 0, 0);
         glutSolidSphere(characterDiameter, 20, 20);
@@ -317,7 +254,7 @@ static void on_display(void)
         glDisable(GL_LIGHTING);
         glColor3f(0,0,0);
         glScalef(0.3,0.2,0.7);
-        glTranslatef(1, 4, -1);
+        glTranslatef(0, 4, -1);
         glutSolidCube(1);
         glEnable(GL_LIGHTING);
     glPopMatrix();
@@ -905,11 +842,54 @@ static void on_mouseLeftClick(int button, int state, int x, int y){
     }
 }
 //-------------------------F U N K C I J E   L I K O V A-------------------------------------------
-
+/*Inicijalizacija strukture metkova*/
+static void bulletInit(){
+    for (int i=0; i!=MAX_BULLETS_ON_SCREEN; i++){
+        bullets[i].bulletSet = false;
+        bullets[i].getMovementVector = false;
+        bullets[i].bulletVelocity = 1.0;
+    }
+}
+/*Pucanje*/
 static void characterShoot(){
 //     DecTest();
 //     printf("(%f, %f) - (%d, %d) - (%d, %d)\n", movementVector[0], movementVector[2], curWorldX, curWorldY, curMatX, curMatY);
-    shoot = 1;
+    if (bulletTracker == MAX_BULLETS_ON_SCREEN)
+        bulletTracker = 0;
+    
+    bullets[bulletTracker].bulletSet = true;
+    bullets[bulletTracker].getMovementVector = true;
+    bulletTracker++;
+}
+/*Kolizija metkova sa terenom i likovima*/
+static bool checkBulletColision(float localBulletX, float localBulletY){
+    
+    int bulletCurWorldX;
+    int bulletCurWorldY;
+    int bulletCurMatX;
+    int bulletCurMatY;
+    
+    bulletCurWorldX = (int)localBulletX;
+    if (bulletCurWorldX < 0){
+        if (bulletCurWorldX % 2 != 0) bulletCurWorldX -= 1;
+    } 
+    else if (bulletCurWorldX % 2 != 0) bulletCurWorldX += 1;
+    
+    /*Za Y osu*/
+    bulletCurWorldY = (int)localBulletY;
+    if (bulletCurWorldY < 0){
+        if (bulletCurWorldY % 2 != 0) bulletCurWorldY -= 1;
+    } 
+    else if (bulletCurWorldY % 2 != 0) bulletCurWorldY += 1;
+    
+    /*Racunanje nase pozicije u matrici*/
+    bulletCurMatX = bulletCurWorldX/2 + matrixSizeX/2;
+    bulletCurMatY = bulletCurWorldY/2 + matrixSizeY/2;
+    
+    if ((bulletCurMatX >= 0 && bulletCurMatX < matrixSizeX) && (bulletCurMatY >= 0 && bulletCurMatY < matrixSizeY))
+        if (M[bulletCurMatX][bulletCurMatY] == 1)
+            return true;
+    return false;
 }
 
 //-------------------------I N I C I J A L I Z A C I J A   T E R E N A-----------------------------
