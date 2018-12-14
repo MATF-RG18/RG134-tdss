@@ -4,11 +4,18 @@
 #include<math.h>
 #include<time.h>
 #include<stdbool.h>
-#include <sys/types.h>
-#include <unistd.h>
+// #include <sys/types.h>
+// #include <unistd.h>
 
+#define MAX_BULLETS_ON_SCREEN 20
+#define TIMER_INITIAL 3000
+#define TIMER_INITIAL_ID 0
 
-#define MAX_BULLETS_ON_SCREEN 10
+#define TIMER_SPAWN_INTERVAL 900
+#define TIMER_SPAWN_ID 1
+
+#define COLISION_TERRAIN 0
+#define COLISION_ENEMY 1
 
 /*MAP PARAMETERS*/
 static float window_width = 1600, window_height = 900;
@@ -18,8 +25,8 @@ static float gPlaneScaleX = 31, gPlaneScaleY = 31;
 static float obstacleChance = 0.08;
 static int **M;
 static float **M_Obstacle;
-static bool fullScreen = false;
-// static GLfloat lightPosition[4] = {0, 10, 0, 1};
+static int maxEnemyNumber = 20;
+static int currentEnemyNumber = 0;
 
 /*MATRIXES*/
 static GLdouble ModelMatrix[16];
@@ -63,38 +70,59 @@ static void on_reshape(int width, int height);
 static void on_display(void);
 static void on_mouseMove(int x, int y);
 static void on_mouseLeftClick(int button, int state, int x, int y);
+static void on_timerInitial(int value);
+static int timerInitialTick = 0;
+static void on_timerSpawnInterval(int value);
 //static void on_mouseClick(int button, int state, int x,int y);
 
 void DecPlane(float colorR, float colorG, float colorB);
 void DecFloorMatrix(float colorR, float colorG, float colorB, float cubeHeight);
 
+
+/*BULLET PARAMETERS*/
 typedef struct{
     float bulletStartingPoint[3];
     float bulletTraj[2];
     float bulletTrajLength;
     float bulletTrajNorm[2];
+    float currentX;
+    float currentY;
+    float currentZ;
     bool bulletSet;
     bool getMovementVector;
     float bulletVelocity;
 } bullet;
+static bullet bullets[MAX_BULLETS_ON_SCREEN];
+static int bulletDmg = 5;
 
 static int bulletTracker = 0;
-static bullet bullets[MAX_BULLETS_ON_SCREEN];
-
-static float maxBulletVelocity = 15.0;
+static float maxBulletVelocity = 30.0;
 static float bulletSpeed = 0.25;
 
 static void bulletInit();
-static bool checkBulletColision(float localBulletX, float localBulletY);
+static bool checkBulletColision(float x, float y, int colisionFlag);
+
+
+typedef struct{
+    float x;
+    float y;
+    int health;
+    bool alive;
+} enemy;
+static enemy *enemies;
+static void enemyInit();
+static void enemySpawn();
+static bool enemyNearPlayer(float i, float j);
 
 int main(int argc, char **argv)
 {
-    printf("%d\n", getpid());
+//     printf("%d\n", getpid());
     /*Globalno svetlo*/
     GLfloat light_ambient[] = { 0, 0, 0, 1 };
     GLfloat light_diffuse[] = { 0.425, 0.415, 0.4, 1 };
-    GLfloat light_specular[] = { 1, 1, 1, 1 };
+    GLfloat light_specular[] = { 0.9, 0.9, 0.9, 1 };
     GLfloat model_ambient[] = { 0.4, 0.4, 0.4, 1 };
+    
     
     /* Inicijalizuje se GLUT. */
     glutInit(&argc, argv);
@@ -104,6 +132,24 @@ int main(int argc, char **argv)
     glutInitWindowSize(window_width, window_height);
     glutInitWindowPosition(100, 100);
     glutCreateWindow("TDSS - Lvl 1");
+    
+    glutGameModeString("1600x900:32@60");
+    if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
+        glutEnterGameMode();
+    else
+    {
+        glutGameModeString("1920x1080:32@60");
+        if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
+            glutEnterGameMode();
+        else
+        {
+            glutGameModeString("1366x768:32@60");
+            if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
+                glutEnterGameMode();
+        }
+    }
+    
+    /*Kursor se menja u ikonicu nisana*/
     glutSetCursor(GLUT_CURSOR_CROSSHAIR);
  
     /* Registruju se callback funkcije. */
@@ -128,9 +174,12 @@ int main(int argc, char **argv)
     glLightfv(GL_LIGHT0, GL_SPECULAR, light_specular);
     glLightModelfv(GL_LIGHT_MODEL_AMBIENT, model_ambient);
     
+    /*Inicijalizacija nekih parametara*/
     DecLevelInit();
     bulletInit();
     //DecTest();
+    
+    enemyInit();
     
     /* Program ulazi u glavnu petlju. */
     glutMainLoop();
@@ -161,15 +210,36 @@ static void on_display(void)
     /* Podesava se vidna tacka. */
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-    
 
     gluLookAt(0, (matrixSizeX+matrixSizeY)/0.85, (matrixSizeX+matrixSizeY)/3, //Sa pozicijom kamere se jos uvek igram
               0, 0, 0.5, 
               0, 1, 0);
-
+    
+    GLfloat light_position[4] = {0, 30, 0, 1};
+    glLightfv(GL_LIGHT0, GL_POSITION, light_position);
     
     DecPlane(0.1, 0.1, 0.1);
     DecFloorMatrix(0.9, 0.9, 0.9, 2);
+
+    /*Cekamo 3 sekunde pre nego sto krenemo da spawnujemo protivnike*/
+    glutTimerFunc(TIMER_INITIAL, on_timerInitial, TIMER_INITIAL_ID);
+    /*Za svakom zivog protivnika, proveravamo da li se desila kolizija sa nekim metkom.
+     Ako jeste, smanjujemo mu health-e. Kad ostane bez health-a, nestaje.*/
+    for (int i=0; i!=currentEnemyNumber; i++){
+        if (enemies[i].alive){
+            if (checkBulletColision(enemies[i].x, enemies[i].y, COLISION_ENEMY)){
+                enemies[i].health -= bulletDmg;
+                if (enemies[i].health <= 0)
+                    enemies[i].alive = false;
+            }
+        }
+        if (enemies[i].alive){
+            glPushMatrix();
+                glTranslatef(enemies[i].x, 1.5/2, enemies[i].y);
+                glutSolidCube(1);
+            glPopMatrix();
+        }
+    }
     
     /*Funkcija za kretanje*/
     characterMovement();
@@ -182,10 +252,10 @@ static void on_display(void)
     }
     glGetIntegerv(GL_VIEWPORT, ViewportMatrix);
     
+    /*Nalazimo koordiante naseg lika u koordinatama ekrana*/
     gluProject(movementVector[0], movementVector[1], movementVector[2],
                ModelMatrix, ProjectionMatrix, ViewportMatrix,
                &objWinX, &objWinY, &objWinZ);
-    
     
     /*Racunanje rotacije*/
     currentRotationX = tempX - ((int)objWinX-window_width/2);
@@ -193,7 +263,9 @@ static void on_display(void)
 
     /*Pocetna pozicija metka*/
     for (int i=0; i!=MAX_BULLETS_ON_SCREEN; i++){
-        float localBulletX, localBulletY, localBulletZ;
+        /*Za svaki metak, ako je setovan, tj ako je "instanciran trenutno", treba azurirati predjeni put 
+         i poziciju, inicijalizovati mu startingPoint i normiran vektor kretanja ako vec nisu inicijalizovani.
+         Na kraju proveravamo koliziju sa terenom.*/
         if (bullets[i].bulletSet){
             bullets[i].bulletVelocity += bulletSpeed;
             
@@ -208,15 +280,18 @@ static void on_display(void)
                 bullets[i].getMovementVector = false;
             }
             
-            localBulletX = bullets[i].bulletStartingPoint[0] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[0];
-            localBulletY = bullets[i].bulletStartingPoint[1];
-            localBulletZ = bullets[i].bulletStartingPoint[2] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[1];
+            bullets[i].currentX = bullets[i].bulletStartingPoint[0] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[0];
+            bullets[i].currentY = bullets[i].bulletStartingPoint[1];
+            bullets[i].currentZ = bullets[i].bulletStartingPoint[2] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[1];
             
             glPushMatrix();
-                glTranslatef(localBulletX, localBulletY, localBulletZ);
+                glTranslatef(bullets[i].currentX, bullets[i].currentY, bullets[i].currentZ);
+                glDisable(GL_LIGHTING);
+                glColor3f(0,0,0);
                 glutSolidSphere(0.2, 5, 5);
+                glEnable(GL_LIGHTING);
             glPopMatrix();
-            if (bullets[i].bulletVelocity >= maxBulletVelocity || checkBulletColision(localBulletX, localBulletZ)){
+            if (bullets[i].bulletVelocity >= maxBulletVelocity || checkBulletColision(bullets[i].currentX, bullets[i].currentZ, COLISION_TERRAIN)){
                 bullets[i].bulletSet = false;
                 bullets[i].bulletVelocity = 1.0;
             }
@@ -229,6 +304,13 @@ static void on_display(void)
 
     /*Inicijalicazija podloge i nivoa*/
     /*Character main*/
+    
+    GLfloat low_shininess[] = { 100 };
+    GLfloat material_ambient[] = {.3, .3, .3, 1};
+    GLfloat material_diffuse[] = {.6, .6, .7, 1};
+    glMaterialfv(GL_FRONT, GL_AMBIENT, material_ambient);
+    glMaterialfv(GL_FRONT, GL_DIFFUSE, material_diffuse);
+    glMaterialfv(GL_FRONT, GL_SHININESS, low_shininess);
     
     /*Gornja lopta*/
     glPushMatrix();
@@ -285,17 +367,7 @@ static void on_keyPress(unsigned char key, int x, int y){
         case 115:
             keyBuffer[115] = true;
             break;
-            
-        case 102:
-            if (!fullScreen){
-                fullScreen = true;
-                glutFullScreen();
-            }
-            else{
-                fullScreen = false;
-                glutReshapeWindow(window_width, window_height);
-            }
-            break;
+
             
         /* Zavrsava se program. */    
         case 27:
@@ -835,7 +907,6 @@ static void on_mouseMove(int x, int y){
     tempY = window_height - y - window_height/2;
     glutPostRedisplay();
 }
-
 static void on_mouseLeftClick(int button, int state, int x, int y){
     if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN){
         characterShoot();
@@ -861,33 +932,108 @@ static void characterShoot(){
     bullets[bulletTracker].getMovementVector = true;
     bulletTracker++;
 }
-/*Kolizija metkova sa terenom i likovima*/
-static bool checkBulletColision(float localBulletX, float localBulletY){
+/*Kolizija metkova sa terenom i protivnicima - u zavisnosti od prosledjenog Flag-a*/
+static bool checkBulletColision(float x, float y, int colisionFlag){
     
-    int bulletCurWorldX;
-    int bulletCurWorldY;
-    int bulletCurMatX;
-    int bulletCurMatY;
-    
-    bulletCurWorldX = (int)localBulletX;
-    if (bulletCurWorldX < 0){
-        if (bulletCurWorldX % 2 != 0) bulletCurWorldX -= 1;
+    /*Kolizija sa terenom*/
+    if (colisionFlag == COLISION_TERRAIN){
+        int bulletCurWorldX;
+        int bulletCurWorldY;
+        int bulletCurMatX;
+        int bulletCurMatY;
+        
+        bulletCurWorldX = (int)x;
+        if (bulletCurWorldX < 0){
+            if (bulletCurWorldX % 2 != 0) bulletCurWorldX -= 1;
+        } 
+        else if (bulletCurWorldX % 2 != 0) bulletCurWorldX += 1;
+        
+        /*Za Y osu*/
+        bulletCurWorldY = (int)y;
+        if (bulletCurWorldY < 0){
+            if (bulletCurWorldY % 2 != 0) bulletCurWorldY -= 1;
+        } 
+        else if (bulletCurWorldY % 2 != 0) bulletCurWorldY += 1;
+        
+        /*Racunanje nase pozicije u matrici*/
+        bulletCurMatX = bulletCurWorldX/2 + matrixSizeX/2;
+        bulletCurMatY = bulletCurWorldY/2 + matrixSizeY/2;
+        
+        if ((bulletCurMatX >= 0 && bulletCurMatX < matrixSizeX) && (bulletCurMatY >= 0 && bulletCurMatY < matrixSizeY))
+            if (M[bulletCurMatX][bulletCurMatY] == 1)
+                return true;
+        return false;
     } 
-    else if (bulletCurWorldX % 2 != 0) bulletCurWorldX += 1;
+    /*Kolizija sa protivnicima*/
+    else if (colisionFlag == COLISION_ENEMY){
+        for (int i=0; i!=MAX_BULLETS_ON_SCREEN; i++){
+            if (bullets[i].bulletSet){
+                if (bullets[i].currentX <= x+0.5 && bullets[i].currentX >= x-0.5){
+                    if (bullets[i].currentZ <= y+0.5 && bullets[i].currentZ >= y-0.5){
+                        /*Ako je doslo do kolizije, metku se resetuje pocetna pozicija i brise se instanca*/
+                        bullets[i].bulletVelocity = 1.0;
+                        bullets[i].bulletSet = false;
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+//-------------------------------P R O T I V N I C I-----------------------------
+/*Inicijalni tajmer od 3 sekunde*/
+static void on_timerInitial(int value){
+    if (value == TIMER_INITIAL_ID + timerInitialTick){
+//         printf("Proslo 3 sekunde\n");
+        timerInitialTick += 10;
+        glutTimerFunc(TIMER_SPAWN_INTERVAL, on_timerSpawnInterval, TIMER_SPAWN_ID);
+    }
+}
+/*Tajmer za interval spawnovanja*/
+static void on_timerSpawnInterval(int value){
     
-    /*Za Y osu*/
-    bulletCurWorldY = (int)localBulletY;
-    if (bulletCurWorldY < 0){
-        if (bulletCurWorldY % 2 != 0) bulletCurWorldY -= 1;
-    } 
-    else if (bulletCurWorldY % 2 != 0) bulletCurWorldY += 1;
+    if (value == TIMER_SPAWN_ID){
+        if (currentEnemyNumber < maxEnemyNumber){
+//             printf("Spawning...\n");
+            enemySpawn();
+            currentEnemyNumber++;
+            glutTimerFunc(TIMER_SPAWN_INTERVAL, on_timerSpawnInterval, TIMER_SPAWN_ID);
+        }
+    }
+}
+static void enemyInit(){
+    enemies = malloc(sizeof(enemy)*maxEnemyNumber);
+    if (!enemies) 
+        greska("Malloc failed\n");
     
-    /*Racunanje nase pozicije u matrici*/
-    bulletCurMatX = bulletCurWorldX/2 + matrixSizeX/2;
-    bulletCurMatY = bulletCurWorldY/2 + matrixSizeY/2;
+    for (int i=0; i!=maxEnemyNumber; i++){
+        enemies[i].health = 10;
+        enemies[i].alive = true;
+    }
+}
+static void enemySpawn(){
+    float i, j;
+    do {
+        i = (float)(rand() % matrixSizeX);
+        j = (float)(rand() % matrixSizeY);        
+    } while (M[(int)i][(int)j] == 1 || enemyNearPlayer(i, j));
     
-    if ((bulletCurMatX >= 0 && bulletCurMatX < matrixSizeX) && (bulletCurMatY >= 0 && bulletCurMatY < matrixSizeY))
-        if (M[bulletCurMatX][bulletCurMatY] == 1)
+    enemies[currentEnemyNumber].x = (i*2)-matrixSizeX+1;
+    enemies[currentEnemyNumber].y = (j*2)-matrixSizeY+1;
+//     printf("(%f, %f) - %d - (%f, %f)\n", i, j, M[(int)i][(int)j], movementVector[0], movementVector[2]);
+}
+static bool enemyNearPlayer(float i, float j){
+    int tmpX = (int)i, tmpY = (int)j;
+    if (tmpX == curMatX){
+        if (tmpY == curMatY || tmpY == curMatY-1 || tmpY == curMatY+1)
+            return true;
+    } else if (tmpX == curMatX+1){
+        if (tmpY == curMatY || tmpY == curMatY-1 || tmpY == curMatY+1)
+            return true;
+    } else if (tmpX == curMatX-1)
+        if (tmpY == curMatY || tmpY == curMatY-1 || tmpY == curMatY+1)
             return true;
     return false;
 }
@@ -958,9 +1104,19 @@ static void DecLevelInit(){
 
 //-------------------------G E N E R A C I J A   P O D L O G E-------------------------
 void DecPlane(float colorR, float colorG, float colorB){
+    
+    GLfloat material_ambient[] = { 0.1, 0.1, 0.1, 1 };
+    GLfloat material_diffuse[] = {0.2, 0.2, 0.2, 1};
+    GLfloat material_specular[] = { 0.3, 0.3, 0.3, 1 };
+    GLfloat shininess[] = { 5 };
+    
     glPushMatrix();
 //         glColor3f(colorR, colorG, colorB);
         glScalef(gPlaneScaleX, 1, gPlaneScaleY);
+        glMaterialfv(GL_FRONT, GL_AMBIENT, material_ambient);
+        glMaterialfv(GL_FRONT, GL_DIFFUSE, material_diffuse);
+        glMaterialfv(GL_FRONT, GL_SPECULAR, material_specular);
+        glMaterialfv(GL_FRONT, GL_SHININESS, shininess);
         glutSolidCube(1);
     glPopMatrix();
 }
@@ -970,14 +1126,30 @@ void DecFloorMatrix(float colorR, float colorG, float colorB, float cubeHeight){
     float color, localCubeHeight;
     int xPos, yPos;
     
+    GLfloat material_diffuse_and_ambient_clear[] = {0.415, 415, 415, 1};
+    GLfloat material_diffuse_and_ambient_obstacle[4];
+    GLfloat material_specular[] = { 0.5, 0.5, 0.5, 0.5 };
+    GLfloat low_shininess[] = { 15 };
+    GLfloat medium_shininess[] = { 100 };
+    
     // 1 ako ima prepreke
     // 0 ako nema
+    material_diffuse_and_ambient_clear[0] = 1;
+    material_diffuse_and_ambient_clear[1] = 0.1;
+    material_diffuse_and_ambient_clear[2] = 0.15;
+    material_diffuse_and_ambient_clear[3] = 1;
+    
     for (int i=0; i!=matrixSizeX; i++){
+        glMaterialfv(GL_FRONT, GL_AMBIENT, material_diffuse_and_ambient_clear);
+        glMaterialfv(GL_FRONT, GL_DIFFUSE, material_diffuse_and_ambient_clear);
+        glMaterialfv(GL_FRONT, GL_SPECULAR, material_specular);
+        glMaterialfv(GL_FRONT, GL_SHININESS, medium_shininess);
         xPos = i-(matrixSizeX/2);
         for (int j=0; j!=matrixSizeY; j++){
             yPos = j-(matrixSizeY/2);
-            color = 0.525-j*0.03;
+            color = 0.55-j*0.03;
             if (M[i][j] == 0){
+                
                 glPushMatrix();
                     glTranslatef(xPos*2, 0.5, yPos*2);
 //                     glColor3f(0.88, 0.88, 0.9);
@@ -987,10 +1159,19 @@ void DecFloorMatrix(float colorR, float colorG, float colorB, float cubeHeight){
             }
             else if (M[i][j] == 1){
                 localCubeHeight = cubeHeight + M_Obstacle[i][j];
+                
+                material_diffuse_and_ambient_obstacle[0] = color;
+                material_diffuse_and_ambient_obstacle[1] = color;
+                material_diffuse_and_ambient_obstacle[2] = color;
+                material_diffuse_and_ambient_obstacle[3] = 1;
+                
                 glPushMatrix();
                     glTranslatef(xPos*2, localCubeHeight/2, yPos*2);
                     glScalef(1.8, localCubeHeight, 1.8);
-//                     glColor3f(color, color, color);
+                    glMaterialfv(GL_FRONT, GL_AMBIENT, material_diffuse_and_ambient_obstacle);
+                    glMaterialfv(GL_FRONT, GL_DIFFUSE, material_diffuse_and_ambient_obstacle);
+                    glMaterialfv(GL_FRONT, GL_SPECULAR, material_specular);
+                    glMaterialfv(GL_FRONT, GL_SHININESS, low_shininess);
                     glutSolidCube(1);
                 glPopMatrix();
             }
