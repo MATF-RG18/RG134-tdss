@@ -4,15 +4,25 @@
 #include<math.h>
 #include<time.h>
 #include<stdbool.h>
+#include<string.h>
 // #include <sys/types.h>
 // #include <unistd.h>
 
-#define MAX_BULLETS_ON_SCREEN 20
-#define TIMER_INITIAL 3000
-#define TIMER_INITIAL_ID 0
+#define GAME_MODE true
 
-#define TIMER_SPAWN_INTERVAL 900
+#define STR_MAX_LEN 256
+
+#define MAX_BULLETS_ON_SCREEN 20
+#define TIMER_INITIAL 1000
+#define TIMER_INITIAL_ID_1 10
+#define TIMER_INITIAL_ID_2 20
+#define TIMER_INITIAL_ID_3 30
+
+#define TIMER_SPAWN_INTERVAL 800
 #define TIMER_SPAWN_ID 1
+
+#define TIMER_DEATH 2000
+#define TIMER_DEATH_ID 2
 
 #define COLISION_TERRAIN 0
 #define COLISION_ENEMY 1
@@ -22,11 +32,14 @@ static float window_width = 1600, window_height = 900;
 static int matrixSizeX, matrixSizeY;
 static int tempX, tempY;
 static float gPlaneScaleX = 31, gPlaneScaleY = 31;
-static float obstacleChance = 0.08;
+static const float obstacleChance = 0.08;
 static int **M;
 static float **M_Obstacle;
-static int maxEnemyNumber = 20;
+static const int maxEnemyNumber = 100;
 static int currentEnemyNumber = 0;
+static int enemiesKilledCounter = 0;
+static char enemiesKilledStr[STR_MAX_LEN];
+static char playerLives[STR_MAX_LEN];
 
 /*MATRIXES*/
 static GLdouble ModelMatrix[16];
@@ -35,7 +48,9 @@ static GLint ViewportMatrix[4];
 static bool notSetP = true;
 
 /*CHARACTER PARAMETERS*/
-static float characterDiameter = 0.6;
+static int characterHealth = 20;
+static int characterHit = 0;
+static const float characterDiameter = 0.6;
 static float movementVector[3] = {0,0,0};
 static float movementSpeed = 0.1;
 static float diagonalMovementMultiplier = 0.707107;
@@ -44,12 +59,21 @@ static int curMatX, curMatY;
 static GLdouble objWinX, objWinY, objWinZ;
 static bool keyBuffer[128];     
 static int currentRotationX, currentRotationY;
-// static float gunBarrel[4] = {-0.25, 0.3, 1, 1};
 
+/*DISPLAY FUNCTIONS*/
+static bool gameMode = GAME_MODE;
+static bool fullScr = false;
+static void displayInitialCountdown();
+static void displayScore();
+static void displayText(GLfloat x, GLfloat y, GLfloat z, char* text, GLfloat scale);
+static void output(GLfloat x, GLfloat y, char *string);
 static void greska(char* text);
 static void DecLevelInit();
 static void DecTest();
 
+static bool movementEnabled = false;
+static bool shootingEnabled = false;
+static bool enemiesEnabled = false;
 static void characterMovement();
 static void characterShoot();
 // static int shoot = 0;
@@ -71,9 +95,12 @@ static void on_display(void);
 static void on_mouseMove(int x, int y);
 static void on_mouseLeftClick(int button, int state, int x, int y);
 static void on_timerInitial(int value);
-static int timerInitialTick = 0;
+static int timerInitialTick_1 = 0;
+static int timerInitialTick_2 = 0;
+static int timerInitialTick_3 = 0;
 static void on_timerSpawnInterval(int value);
-//static void on_mouseClick(int button, int state, int x,int y);
+static void on_timerDeath(int value);
+
 
 void DecPlane(float colorR, float colorG, float colorB);
 void DecFloorMatrix(float colorR, float colorG, float colorB, float cubeHeight);
@@ -96,13 +123,20 @@ static bullet bullets[MAX_BULLETS_ON_SCREEN];
 static int bulletDmg = 5;
 
 static int bulletTracker = 0;
-static float maxBulletVelocity = 30.0;
-static float bulletSpeed = 0.25;
+static const float maxBulletVelocity = 30.0;
+static const float bulletSpeed = 0.25;
 
 static void bulletInit();
+
+/*Ova funkcija proverava koliziju na sledeci nacin:
+  - Ako je prosledjen flag COLISION_TERRAIN, onda se kao x i y prosledjuje trenutna pozicija metka u prostoru
+    i provera se kolizija metka sa terenom.
+  - Ako je prosledjen flag COLISION_ENEMY, onda se kao x i y prosledjuje trenutna pozicija protivnika u prostoru
+    i proverava se kolizicija protivnika sa svim metkovima.*/
 static bool checkBulletColision(float x, float y, int colisionFlag);
 
 
+/*ENEMY PARAMETERS*/
 typedef struct{
     float x;
     float y;
@@ -110,9 +144,13 @@ typedef struct{
     bool alive;
 } enemy;
 static enemy *enemies;
+static const float enemyDiameter = 0.6;
+static float enemySpeed = 0.102;
 static void enemyInit();
 static void enemySpawn();
 static bool enemyNearPlayer(float i, float j);
+static void drawEnemy();
+static void enemyMovement();
 
 int main(int argc, char **argv)
 {
@@ -133,19 +171,21 @@ int main(int argc, char **argv)
     glutInitWindowPosition(100, 100);
     glutCreateWindow("TDSS - Lvl 1");
     
-    glutGameModeString("1600x900:32@60");
-    if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
-        glutEnterGameMode();
-    else
-    {
-        glutGameModeString("1920x1080:32@60");
+    if (gameMode){
+        glutGameModeString("1600x900:32@60");
         if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
             glutEnterGameMode();
         else
         {
-            glutGameModeString("1366x768:32@60");
+            glutGameModeString("1920x1080:32@60");
             if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
                 glutEnterGameMode();
+            else
+            {
+                glutGameModeString("1366x768:32@60");
+                if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
+                    glutEnterGameMode();
+            }
         }
     }
     
@@ -162,8 +202,9 @@ int main(int argc, char **argv)
     glutMouseFunc(on_mouseLeftClick);
  
     /* Obavlja se OpenGL inicijalizacija. */
-    glClearColor(0.75, 0.75, 0.75, 0);
+    glClearColor(0.7, 0.7, 0.7, 0);
     glEnable(GL_DEPTH_TEST | GL_POLYGON_SMOOTH);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glLineWidth(2);
 
     /*Svetlo*/
@@ -177,9 +218,10 @@ int main(int argc, char **argv)
     /*Inicijalizacija nekih parametara*/
     DecLevelInit();
     bulletInit();
+    enemyInit();
+    
     //DecTest();
     
-    enemyInit();
     
     /* Program ulazi u glavnu petlju. */
     glutMainLoop();
@@ -187,15 +229,13 @@ int main(int argc, char **argv)
     return 0;
 }
 
-static void on_reshape(int width, int height)
-{
+static void on_reshape(int width, int height){
     /* Pamte se sirina i visina prozora. */
     window_width = width;
     window_height = height;
 }
 
-static void on_display(void)
-{
+static void on_display(void){
     /* Brise se prethodni sadrzaj prozora. */
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
  
@@ -211,38 +251,63 @@ static void on_display(void)
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
-    gluLookAt(0, (matrixSizeX+matrixSizeY)/0.85, (matrixSizeX+matrixSizeY)/3, //Sa pozicijom kamere se jos uvek igram
-              0, 0, 0.5, 
+    gluLookAt(0, (matrixSizeX+matrixSizeY)/0.8, (matrixSizeX+matrixSizeY)/2.8, //Sa pozicijom kamere se jos uvek igram
+              0, 0, 0, 
               0, 1, 0);
     
     GLfloat light_position[4] = {0, 30, 0, 1};
     glLightfv(GL_LIGHT0, GL_POSITION, light_position);
     
+    /*Iscrtavanje terena*/
     DecPlane(0.1, 0.1, 0.1);
     DecFloorMatrix(0.9, 0.9, 0.9, 2);
 
+    /*Ispis trenutnog rezultata i zivota*/
+    displayScore();
+    
+    /*Ako igrac ostane bez helta, scena se pauzira i program se gasi posle sekunde*/
+    if (characterHealth <= 0){
+        glutTimerFunc(TIMER_DEATH, on_timerDeath, TIMER_DEATH_ID);
+        enemiesEnabled = false;
+        displayText(-5.2, 0, 5.6, "GAME OVER", 2);
+    }
+    /*Inace sve ide normalno*/
+    
     /*Cekamo 3 sekunde pre nego sto krenemo da spawnujemo protivnike*/
-    glutTimerFunc(TIMER_INITIAL, on_timerInitial, TIMER_INITIAL_ID);
-    /*Za svakom zivog protivnika, proveravamo da li se desila kolizija sa nekim metkom.
-     Ako jeste, smanjujemo mu health-e. Kad ostane bez health-a, nestaje.*/
-    for (int i=0; i!=currentEnemyNumber; i++){
-        if (enemies[i].alive){
-            if (checkBulletColision(enemies[i].x, enemies[i].y, COLISION_ENEMY)){
-                enemies[i].health -= bulletDmg;
-                if (enemies[i].health <= 0)
-                    enemies[i].alive = false;
-            }
-        }
-        if (enemies[i].alive){
-            glPushMatrix();
-                glTranslatef(enemies[i].x, 1.5/2, enemies[i].y);
-                glutSolidCube(1);
-            glPopMatrix();
-        }
+    glutTimerFunc(TIMER_INITIAL, on_timerInitial, TIMER_INITIAL_ID_1);
+    displayInitialCountdown();
+    
+    if (characterHit + enemiesKilledCounter == maxEnemyNumber){
+        displayText(-4.5, 0, 5.6, "YOU WON!!!", 2);
     }
     
+    if (enemiesEnabled) {
+        /*Za svakom zivog protivnika, proveravamo da li se desila kolizija sa nekim metkom.
+        Ako jeste, smanjujemo mu health-e. Kad ostane bez health-a, nestaje.*/
+        for (int i=0; i!=currentEnemyNumber; i++){
+            if (enemies[i].alive){
+                if (checkBulletColision(enemies[i].x, enemies[i].y, COLISION_ENEMY)){
+                    enemies[i].health -= bulletDmg;
+                    if (enemies[i].health <= 0){
+                        enemies[i].alive = false;
+                        enemiesKilledCounter++;
+                    }
+                }
+            }
+            /*Racunanje kretanja i kolizije*/
+            enemyMovement(i);
+            if (enemies[i].alive){
+                glPushMatrix();
+                    glTranslatef(enemies[i].x, 0.75, enemies[i].y);
+                    drawEnemy();
+                glPopMatrix();
+            }
+        }
+    }
+        
     /*Funkcija za kretanje*/
-    characterMovement();
+    if (movementEnabled)
+        characterMovement();
     
     /*gluProject*/
     glGetDoublev(GL_MODELVIEW_MATRIX, ModelMatrix);
@@ -254,60 +319,61 @@ static void on_display(void)
     
     /*Nalazimo koordiante naseg lika u koordinatama ekrana*/
     gluProject(movementVector[0], movementVector[1], movementVector[2],
-               ModelMatrix, ProjectionMatrix, ViewportMatrix,
-               &objWinX, &objWinY, &objWinZ);
+            ModelMatrix, ProjectionMatrix, ViewportMatrix,
+            &objWinX, &objWinY, &objWinZ);
     
     /*Racunanje rotacije*/
     currentRotationX = tempX - ((int)objWinX-window_width/2);
     currentRotationY = tempY - ((int)objWinY-window_height/2); 
 
     /*Pocetna pozicija metka*/
-    for (int i=0; i!=MAX_BULLETS_ON_SCREEN; i++){
-        /*Za svaki metak, ako je setovan, tj ako je "instanciran trenutno", treba azurirati predjeni put 
-         i poziciju, inicijalizovati mu startingPoint i normiran vektor kretanja ako vec nisu inicijalizovani.
-         Na kraju proveravamo koliziju sa terenom.*/
-        if (bullets[i].bulletSet){
-            bullets[i].bulletVelocity += bulletSpeed;
-            
-            if (bullets[i].getMovementVector){
-                bullets[i].bulletStartingPoint[0] = movementVector[0];
-                bullets[i].bulletStartingPoint[1] = 1.0;
-                bullets[i].bulletStartingPoint[2] = movementVector[2];
+    if (shootingEnabled){
+        for (int i=0; i!=MAX_BULLETS_ON_SCREEN; i++){
+            /*Za svaki metak, ako je setovan, tj ako je "instanciran trenutno", treba azurirati predjeni put 
+            i poziciju, inicijalizovati mu startingPoint i normiran vektor kretanja ako vec nisu inicijalizovani.
+            Na kraju proveravamo koliziju sa terenom.*/
+            if (bullets[i].bulletSet){
+                bullets[i].bulletVelocity += bulletSpeed;
                 
-                bullets[i].bulletTrajLength = sqrt(currentRotationX*currentRotationX + currentRotationY*currentRotationY);
-                bullets[i].bulletTrajNorm[0] = currentRotationX / bullets[i].bulletTrajLength;
-                bullets[i].bulletTrajNorm[1] = -currentRotationY / bullets[i].bulletTrajLength;
-                bullets[i].getMovementVector = false;
-            }
-            
-            bullets[i].currentX = bullets[i].bulletStartingPoint[0] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[0];
-            bullets[i].currentY = bullets[i].bulletStartingPoint[1];
-            bullets[i].currentZ = bullets[i].bulletStartingPoint[2] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[1];
-            
-            glPushMatrix();
-                glTranslatef(bullets[i].currentX, bullets[i].currentY, bullets[i].currentZ);
-                glDisable(GL_LIGHTING);
-                glColor3f(0,0,0);
-                glutSolidSphere(0.2, 5, 5);
-                glEnable(GL_LIGHTING);
-            glPopMatrix();
-            if (bullets[i].bulletVelocity >= maxBulletVelocity || checkBulletColision(bullets[i].currentX, bullets[i].currentZ, COLISION_TERRAIN)){
-                bullets[i].bulletSet = false;
-                bullets[i].bulletVelocity = 1.0;
+                if (bullets[i].getMovementVector){
+                    bullets[i].bulletStartingPoint[0] = movementVector[0];
+                    bullets[i].bulletStartingPoint[1] = 1.0;
+                    bullets[i].bulletStartingPoint[2] = movementVector[2];
+                    
+                    bullets[i].bulletTrajLength = sqrt(currentRotationX*currentRotationX + currentRotationY*currentRotationY);
+                    bullets[i].bulletTrajNorm[0] = currentRotationX / bullets[i].bulletTrajLength;
+                    bullets[i].bulletTrajNorm[1] = -currentRotationY / bullets[i].bulletTrajLength;
+                    bullets[i].getMovementVector = false;
+                }
+                
+                bullets[i].currentX = bullets[i].bulletStartingPoint[0] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[0];
+                bullets[i].currentY = bullets[i].bulletStartingPoint[1];
+                bullets[i].currentZ = bullets[i].bulletStartingPoint[2] + bullets[i].bulletVelocity*bullets[i].bulletTrajNorm[1];
+                
+                glPushMatrix();
+                    glTranslatef(bullets[i].currentX, bullets[i].currentY, bullets[i].currentZ);
+                    glDisable(GL_LIGHTING);
+                    glColor3f(0,0,0);
+                    glutSolidSphere(0.2, 5, 5);
+                    glEnable(GL_LIGHTING);
+                glPopMatrix();
+                if (bullets[i].bulletVelocity >= maxBulletVelocity || checkBulletColision(bullets[i].currentX, bullets[i].currentZ, COLISION_TERRAIN)){
+                    bullets[i].bulletSet = false;
+                    bullets[i].bulletVelocity = 1.0;
+                }
             }
         }
     }
     
     
+    /*Pomeranje i rotacija igraca*/
     glTranslatef(movementVector[0], 1, movementVector[2]);
     glRotatef(atan2(currentRotationX, currentRotationY)*(-180)/M_PI, 0, 1, 0);
 
-    /*Inicijalicazija podloge i nivoa*/
     /*Character main*/
-    
     GLfloat low_shininess[] = { 100 };
     GLfloat material_ambient[] = {.3, .3, .3, 1};
-    GLfloat material_diffuse[] = {.6, .6, .7, 1};
+    GLfloat material_diffuse[] = {.8, .8, .7, 1};
     glMaterialfv(GL_FRONT, GL_AMBIENT, material_ambient);
     glMaterialfv(GL_FRONT, GL_DIFFUSE, material_diffuse);
     glMaterialfv(GL_FRONT, GL_SHININESS, low_shininess);
@@ -345,6 +411,8 @@ static void on_display(void)
     glutSwapBuffers();
 }
 
+
+//------------------------C A L L B A C K   T A S T A T U R E-----------------------------
 static void on_keyPress(unsigned char key, int x, int y){
     switch (key) {
         
@@ -368,17 +436,33 @@ static void on_keyPress(unsigned char key, int x, int y){
             keyBuffer[115] = true;
             break;
 
-            
+        case 70:
+        case 102:
+            if (!(gameMode)){
+                if (fullScr == false){
+                    glutFullScreen();
+                    fullScr = true;
+                }
+                else {
+                    glutReshapeWindow(window_width, window_height);
+                    fullScr = false;
+                }
+            }
+            break;
         /* Zavrsava se program. */    
         case 27:
-            for (int i=0; i!=matrixSizeX; i++)
+            for (int i=0; i!=matrixSizeX; i++){
                 free(M[i]);
+                free(M_Obstacle[i]);
+            }
             free(M);
+            free(M_Obstacle);
+            free(enemies);
+
             exit(0);
             break;
     }
 }
-
 static void on_keyRelease(unsigned char key, int x, int y){
     switch (key) {
         
@@ -400,6 +484,7 @@ static void on_keyRelease(unsigned char key, int x, int y){
             break;
     }
 }
+
 
 //------------------------F U N K C I J E   K R E T A N J A-------------------------
 static void moveLeft(){
@@ -430,6 +515,7 @@ static void moveDownRight(){
     movementVector[2] += movementSpeed * diagonalMovementMultiplier;
     movementVector[0] += movementSpeed * diagonalMovementMultiplier;
 }
+
 
 //-------------------------K O N T R O L A   K R E T A N J A-------------------------
 void characterMovement(){
@@ -901,6 +987,7 @@ void characterMovement(){
     glutPostRedisplay();
 }
 
+
 //-------------------------K O O R D I N A T E   M I S A-------------------------
 static void on_mouseMove(int x, int y){
     tempX = x-window_width/2;
@@ -909,9 +996,12 @@ static void on_mouseMove(int x, int y){
 }
 static void on_mouseLeftClick(int button, int state, int x, int y){
     if (button == GLUT_LEFT_BUTTON && state == GLUT_DOWN){
-        characterShoot();
+        if (shootingEnabled)
+            characterShoot();
     }
 }
+
+
 //-------------------------F U N K C I J E   L I K O V A-------------------------------------------
 /*Inicijalizacija strukture metkova*/
 static void bulletInit(){
@@ -981,13 +1071,37 @@ static bool checkBulletColision(float x, float y, int colisionFlag){
     }
     return false;
 }
+static void on_timerDeath(int value){
+    if (value == TIMER_DEATH_ID){
+        for (int i=0; i!=matrixSizeX; i++){
+                free(M[i]);
+                free(M_Obstacle[i]);
+        }
+        free(M);
+        free(M_Obstacle);
+        free(enemies);
+        exit(0);
+    }
+}
+
 
 //-------------------------------P R O T I V N I C I-----------------------------
-/*Inicijalni tajmer od 3 sekunde*/
+/*Inicijalni tajmer od 3 sekunde.
+ Ovde omogucavamo pucanje, kretanje i protivnike*/
 static void on_timerInitial(int value){
-    if (value == TIMER_INITIAL_ID + timerInitialTick){
-//         printf("Proslo 3 sekunde\n");
-        timerInitialTick += 10;
+    if (value == TIMER_INITIAL_ID_1 + timerInitialTick_1){
+        timerInitialTick_1++;
+        glutTimerFunc(TIMER_INITIAL, on_timerInitial, TIMER_INITIAL_ID_2);
+    }
+    else if (value == TIMER_INITIAL_ID_2 + timerInitialTick_2){
+        timerInitialTick_2++;
+        glutTimerFunc(TIMER_INITIAL, on_timerInitial, TIMER_INITIAL_ID_3);
+    }
+    else if (value == TIMER_INITIAL_ID_3 + timerInitialTick_3){
+        timerInitialTick_3++;
+        movementEnabled = true;
+        shootingEnabled = true;
+        enemiesEnabled = true;
         glutTimerFunc(TIMER_SPAWN_INTERVAL, on_timerSpawnInterval, TIMER_SPAWN_ID);
     }
 }
@@ -1026,16 +1140,132 @@ static void enemySpawn(){
 }
 static bool enemyNearPlayer(float i, float j){
     int tmpX = (int)i, tmpY = (int)j;
-    if (tmpX == curMatX){
-        if (tmpY == curMatY || tmpY == curMatY-1 || tmpY == curMatY+1)
-            return true;
-    } else if (tmpX == curMatX+1){
-        if (tmpY == curMatY || tmpY == curMatY-1 || tmpY == curMatY+1)
-            return true;
-    } else if (tmpX == curMatX-1)
-        if (tmpY == curMatY || tmpY == curMatY-1 || tmpY == curMatY+1)
-            return true;
+    for (int l=tmpX-2; l!=tmpX+3; l++)
+        for (int k=tmpY-2; k!=tmpY+3; k++)
+            if (l == curMatX && k == curMatY)
+                return true;
     return false;
+    
+}
+static void drawEnemy(){
+    GLfloat low_shininess[] = { 100 };
+    GLfloat material_ambient[] = {0.8, .5, .5, 1};
+    GLfloat material_diffuse[] = {1, 0, 0, 1};
+    glMaterialfv(GL_FRONT, GL_AMBIENT, material_ambient);
+    glMaterialfv(GL_FRONT, GL_DIFFUSE, material_diffuse);
+    glMaterialfv(GL_FRONT, GL_SHININESS, low_shininess);
+    
+    glPushMatrix();
+        glTranslatef(0, 0.1, 0);
+        glRotatef(90, 1, 0, 0);
+        glutSolidSphere(enemyDiameter, 20, 20);
+    glPopMatrix();
+    /*Cilindar*/
+    glPushMatrix();
+        glTranslatef(0, 1.05, 0);
+        glRotatef(90, 1, 0, 0);
+        gluCylinder(gluNewQuadric(), enemyDiameter, enemyDiameter, 1, 20, 1);
+    glPopMatrix();
+    /*Donja lopta*/
+    glPushMatrix();
+        glTranslatef(0, 1, 0);
+        glRotatef(90, 1, 0, 0);
+        glutSolidSphere(enemyDiameter, 20, 20);
+    glPopMatrix();
+}
+static void enemyMovement(int enemy){
+    float enemyMovementVector[2];
+    float enemyMovementNormVector[2];
+    float enemyMovementVectorLength;
+    
+    float enemyPlayerDistance;
+    
+    if (enemies[enemy].alive){
+        enemyMovementVector[0] = movementVector[0] - enemies[enemy].x;
+        enemyMovementVector[1] = movementVector[2] - enemies[enemy].y;
+        
+        enemyMovementVectorLength = sqrt(enemyMovementVector[0]*enemyMovementVector[0] + enemyMovementVector[1]*enemyMovementVector[1]);
+        enemyMovementNormVector[0] = enemyMovementVector[0]/enemyMovementVectorLength;
+        enemyMovementNormVector[1] = enemyMovementVector[1]/enemyMovementVectorLength;
+        
+        enemies[enemy].x += enemyMovementNormVector[0] * enemySpeed;
+        enemies[enemy].y += enemyMovementNormVector[1] * enemySpeed;
+        
+        enemyPlayerDistance = sqrt(pow(enemies[enemy].x-movementVector[0],2) + pow(enemies[enemy].y-movementVector[2],2));
+        
+        if (enemyPlayerDistance <= enemyDiameter/2 + characterDiameter/2 + 0.25){
+            characterHealth -= 5;
+            characterHit++;
+            enemies[enemy].alive = false;
+        }
+    }
+}
+
+
+static void output(GLfloat x, GLfloat y, char *string){
+    
+    char *p;
+
+    glPushMatrix();
+        glTranslatef(x, y, 0);
+        glScalef(1/152.38, 1/152.38, 1/152.38);
+        for (p = string; *p; p++)
+            glutStrokeCharacter(GLUT_STROKE_ROMAN, *p);
+    glPopMatrix();
+}
+static void displayInitialCountdown(){
+    int timerSum = timerInitialTick_1 + timerInitialTick_2 + timerInitialTick_3;
+    if (timerSum == 0)
+        displayText(-0.8, -3, 5, "3", 4);
+    else if (timerSum == 1)
+        displayText(-0.8, -3, 5, "2", 4);
+    else if (timerSum == 2)
+        displayText(-0.8, -3, 5, "1", 4);
+}
+static void displayScore(){
+    sprintf(enemiesKilledStr, "Killed: %d", enemiesKilledCounter);
+    switch(characterHealth){
+        case 20:
+            sprintf(playerLives, "Lives: ****");
+            break;
+        case 15:
+            sprintf(playerLives, "Lives: ***");
+            break;
+        case 10:
+            sprintf(playerLives, "Lives: **");
+            break;
+        case 5:
+            sprintf(playerLives, "Lives: *");
+            break;
+        default:
+            sprintf(playerLives, "Lives: ");
+            break;
+    }
+    glEnable(GL_BLEND);
+    glEnable(GL_LINE_SMOOTH);
+    glDisable(GL_LIGHTING);
+    glColor3f(0,0,0);
+    output(1, 23.5, enemiesKilledStr);
+    output(-5, 23.5, playerLives);
+    glEnable(GL_LIGHTING);
+    glDisable(GL_BLEND);
+    glDisable(GL_LINE_SMOOTH);
+}
+static void displayText(GLfloat x, GLfloat y, GLfloat z, char* text, GLfloat scale){
+    glPushMatrix();
+            glDisable(GL_LIGHTING);
+            glEnable(GL_BLEND);
+            glEnable(GL_LINE_SMOOTH);
+            glColor3f(0.6, 0, 0);
+            glRotatef(-45, 1, 0, 0);
+            glTranslatef(x, y, z);
+            glScalef(scale, scale, scale);
+            glLineWidth(3.0);
+            output(0, 3, text);
+            glEnable(GL_LIGHTING);
+            glDisable(GL_BLEND);
+            glDisable(GL_LINE_SMOOTH);
+        glPopMatrix();
 }
 
 //-------------------------I N I C I J A L I Z A C I J A   T E R E N A-----------------------------
@@ -1102,6 +1332,7 @@ static void DecLevelInit(){
         keyBuffer[i] = false;
 }
 
+
 //-------------------------G E N E R A C I J A   P O D L O G E-------------------------
 void DecPlane(float colorR, float colorG, float colorB){
     
@@ -1120,6 +1351,7 @@ void DecPlane(float colorR, float colorG, float colorB){
         glutSolidCube(1);
     glPopMatrix();
 }
+
 
 //-------------------------G E N E R A C I J A   T E R E N A---------------------------
 void DecFloorMatrix(float colorR, float colorG, float colorB, float cubeHeight){
@@ -1190,7 +1422,6 @@ static void DecTest(){
     }
     printf("X i Y skalirani: %d, %d\n", matrixSizeX, matrixSizeY);
 }
-
 static void greska(char* text){
     fprintf(stderr, "%s\n", text);
     exit(1);
