@@ -5,14 +5,15 @@
 #include<time.h>
 #include<stdbool.h>
 #include<string.h>
-// #include <sys/types.h>
-// #include <unistd.h>
+#include <unistd.h>
 
+/*Ako stavimo GAME_MODE na false, mozemo da fullscreenujemo program na f, umesto da ga glutGameMode automatski fullscreenuje*/
 #define GAME_MODE true
 
 #define STR_MAX_LEN 256
 
 #define MAX_BULLETS_ON_SCREEN 20
+
 #define TIMER_INITIAL 1000
 #define TIMER_INITIAL_ID_1 10
 #define TIMER_INITIAL_ID_2 20
@@ -27,8 +28,10 @@
 #define COLISION_TERRAIN 0
 #define COLISION_ENEMY 1
 
+
 /*MAP PARAMETERS*/
-static float window_width = 1600, window_height = 900;
+
+static float window_width, window_height;
 static int matrixSizeX, matrixSizeY;
 static int tempX, tempY;
 static float gPlaneScaleX = 31, gPlaneScaleY = 31;
@@ -54,8 +57,8 @@ static const float characterDiameter = 0.6;
 static float movementVector[3] = {0,0,0};
 static float movementSpeed = 0.1;
 static float diagonalMovementMultiplier = 0.707107;
-static int curWorldX, curWorldY;
-static int curMatX, curMatY;
+static int curWorldX, curWorldY; // Trenutna pozicija lika u world-space-u
+static int curMatX, curMatY;  // Trenutna pozicija lika u matrici
 static GLdouble objWinX, objWinY, objWinZ;
 static bool keyBuffer[128];     
 static int currentRotationX, currentRotationY;
@@ -154,7 +157,6 @@ static void enemyMovement();
 
 int main(int argc, char **argv)
 {
-//     printf("%d\n", getpid());
     /*Globalno svetlo*/
     GLfloat light_ambient[] = { 0, 0, 0, 1 };
     GLfloat light_diffuse[] = { 0.425, 0.415, 0.4, 1 };
@@ -173,18 +175,27 @@ int main(int argc, char **argv)
     
     if (gameMode){
         glutGameModeString("1600x900:32@60");
-        if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
+        if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE)){
+            window_width = 1600;
+            window_height = 900;
             glutEnterGameMode();
+        }
         else
         {
             glutGameModeString("1920x1080:32@60");
-            if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
+            if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE)){
+                window_width = 1920;
+                window_height = 1080;
                 glutEnterGameMode();
+            }
             else
             {
                 glutGameModeString("1366x768:32@60");
-                if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE))
+                if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE)){
+                    window_width = 1366;
+                    window_height = 768;
                     glutEnterGameMode();
+                }
             }
         }
     }
@@ -245,7 +256,7 @@ static void on_display(void){
     /* Podesava se projekcija. */
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    gluPerspective(50, window_width/window_height, 1, 50);
+    gluPerspective(50, window_width/window_height, 1, 1000);
  
     /* Podesava se vidna tacka. */
     glMatrixMode(GL_MODELVIEW);
@@ -282,8 +293,10 @@ static void on_display(void){
     }
     
     if (enemiesEnabled) {
+        
         /*Za svakom zivog protivnika, proveravamo da li se desila kolizija sa nekim metkom.
         Ako jeste, smanjujemo mu health-e. Kad ostane bez health-a, nestaje.*/
+        
         for (int i=0; i!=currentEnemyNumber; i++){
             if (enemies[i].alive){
                 if (checkBulletColision(enemies[i].x, enemies[i].y, COLISION_ENEMY)){
@@ -326,12 +339,14 @@ static void on_display(void){
     currentRotationX = tempX - ((int)objWinX-window_width/2);
     currentRotationY = tempY - ((int)objWinY-window_height/2); 
 
-    /*Pocetna pozicija metka*/
+    /*Metkovi*/
     if (shootingEnabled){
         for (int i=0; i!=MAX_BULLETS_ON_SCREEN; i++){
+            
             /*Za svaki metak, ako je setovan, tj ako je "instanciran trenutno", treba azurirati predjeni put 
             i poziciju, inicijalizovati mu startingPoint i normiran vektor kretanja ako vec nisu inicijalizovani.
             Na kraju proveravamo koliziju sa terenom.*/
+            
             if (bullets[i].bulletSet){
                 bullets[i].bulletVelocity += bulletSpeed;
                 
@@ -417,22 +432,26 @@ static void on_keyPress(unsigned char key, int x, int y){
     switch (key) {
         
         /*Napred - w*/
-        case 119:
+        case 'w':
+        case 'W':
             keyBuffer[119] = true;
             break;
             
         /*Levo   - a*/
-        case 97:
+        case 'a':
+        case 'A':
             keyBuffer[97] = true;
             break;
             
         /*Desno  - d*/
-        case 100:
+        case 'd':
+        case 'D':
             keyBuffer[100] = true;
             break;
             
         /*Nazad  - s*/
-        case 115:
+        case 's':
+        case 'S':
             keyBuffer[115] = true;
             break;
 
@@ -467,19 +486,23 @@ static void on_keyRelease(unsigned char key, int x, int y){
     switch (key) {
         
         /*Napred - w*/
-        case 119:
+        case 'w':
+        case 'W':
             keyBuffer[119] = false;
             break;
         /*Levo   - a*/
-        case 97:
+        case 'a':
+        case 'A':
             keyBuffer[97] = false;
             break;
         /*Nazad  - s*/
-        case 115:
+        case 's':
+        case 'S':
             keyBuffer[115] = false;
             break;
         /*Desno  - d*/
-        case 100:
+        case 'd':
+        case 'D':
             keyBuffer[100] = false;
             break;
     }
@@ -518,6 +541,7 @@ static void moveDownRight(){
 
 
 //-------------------------K O N T R O L A   K R E T A N J A-------------------------
+/*Ovde ima puno koda, pokriva svaki slucaj kolizije glavnog lika i terena, radi bez obzira na dimenzije terena*/
 void characterMovement(){
     
     int wa, wd;
@@ -1071,6 +1095,7 @@ static bool checkBulletColision(float x, float y, int colisionFlag){
     }
     return false;
 }
+/*Posle gubljenja svih zivota, igra se gasi nakon 1.5 sekunde*/
 static void on_timerDeath(int value){
     if (value == TIMER_DEATH_ID){
         for (int i=0; i!=matrixSizeX; i++){
@@ -1202,6 +1227,7 @@ static void enemyMovement(int enemy){
 }
 
 
+//------------------------I S P I S   N A   E K R A N U---------------------------------------------
 static void output(GLfloat x, GLfloat y, char *string){
     
     char *p;
@@ -1245,7 +1271,7 @@ static void displayScore(){
     glEnable(GL_LINE_SMOOTH);
     glDisable(GL_LIGHTING);
     glColor3f(0,0,0);
-    output(1, 23.5, enemiesKilledStr);
+    output(1.5, 23.5, enemiesKilledStr);
     output(-5, 23.5, playerLives);
     glEnable(GL_LIGHTING);
     glDisable(GL_BLEND);
@@ -1267,6 +1293,7 @@ static void displayText(GLfloat x, GLfloat y, GLfloat z, char* text, GLfloat sca
             glDisable(GL_LINE_SMOOTH);
         glPopMatrix();
 }
+
 
 //-------------------------I N I C I J A L I Z A C I J A   T E R E N A-----------------------------
 static void DecLevelInit(){
@@ -1333,16 +1360,15 @@ static void DecLevelInit(){
 }
 
 
-//-------------------------G E N E R A C I J A   P O D L O G E-------------------------
+//-------------------------G E N E R A C I J A   T E R E N A---------------------------
 void DecPlane(float colorR, float colorG, float colorB){
     
     GLfloat material_ambient[] = { 0.1, 0.1, 0.1, 1 };
-    GLfloat material_diffuse[] = {0.2, 0.2, 0.2, 1};
+    GLfloat material_diffuse[] = {colorR, colorG, colorB, 1};
     GLfloat material_specular[] = { 0.3, 0.3, 0.3, 1 };
     GLfloat shininess[] = { 5 };
     
     glPushMatrix();
-//         glColor3f(colorR, colorG, colorB);
         glScalef(gPlaneScaleX, 1, gPlaneScaleY);
         glMaterialfv(GL_FRONT, GL_AMBIENT, material_ambient);
         glMaterialfv(GL_FRONT, GL_DIFFUSE, material_diffuse);
@@ -1351,9 +1377,6 @@ void DecPlane(float colorR, float colorG, float colorB){
         glutSolidCube(1);
     glPopMatrix();
 }
-
-
-//-------------------------G E N E R A C I J A   T E R E N A---------------------------
 void DecFloorMatrix(float colorR, float colorG, float colorB, float cubeHeight){
     float color, localCubeHeight;
     int xPos, yPos;
@@ -1410,6 +1433,7 @@ void DecFloorMatrix(float colorR, float colorG, float colorB, float cubeHeight){
         }
     }
 }
+
 
 //-------------------------T E S T   F U N K C I J A-------------------------
 static void DecTest(){
