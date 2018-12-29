@@ -7,7 +7,8 @@
 #include<string.h>
 #include <unistd.h>
 
-/*Ako stavimo GAME_MODE na false, mozemo da fullscreenujemo program na f, umesto da ga glutGameMode automatski fullscreenuje*/
+/*Ako stavimo GAME_MODE na false, mozemo da fullscreenujemo program na 'f', umesto da ga glutGameMode automatski fullscreenuje.
+  Meni ponekad glutGameMode pravi dropove u fpsu, pa ako se desi i tebi samo cepi ovo na false i fullsceenuj.*/
 #define GAME_MODE true
 
 #define STR_MAX_LEN 256
@@ -30,11 +31,20 @@
 
 
 /*MAP PARAMETERS*/
-
+/*
+ * M i M_obstacle su matrice preko kojih je realizovan teren. U matrici M, ako je M[i][j] == 0, na tom mestu nema prepreke, a ako je 1 onda ima.
+ * Za 'i' i 'j' za koje vazi da je M[i][j] == 1, u matrici M_obstacle[i][j] se nalazi visina prepreke. Raspodela pozicija prepreka i njihove visine se 
+ * generisu nasumicno u DecLevelInit(). 
+ * gPlaneScaleX i gPlaneScaleY odredjuju duzinu stranica terena u worldspace koordinatnom sistemu, a matrixSizeX i matrixSizeY na osnovu toga
+ * racunaju dimenzije samih matrica. 
+ * Kamera i prikaz score-a nisu najbolje podeseni za slucajeve kad su gPlaneScale parametri manji od 31 ili veci od 41.
+ */
+/*Stavio sam samo 3 rezolucije kao podrzane: '1600x900', '1920x1080' i '1366x768'. Ako ne odgovara ni jedna, dodaj u main jos jednu glutGameModeString() proveru 
+ *za neku koju moze kod tebe.*/
 static float window_width, window_height;
 static int matrixSizeX, matrixSizeY;
 static int tempX, tempY;
-static float gPlaneScaleX = 31, gPlaneScaleY = 31;
+static float gPlaneScaleX = 31, gPlaneScaleY = 31; // ne sme biti manje od 5;
 static const float obstacleChance = 0.08;
 static int **M;
 static float **M_Obstacle;
@@ -57,10 +67,9 @@ static const float characterDiameter = 0.6;
 static float movementVector[3] = {0,0,0};
 static float movementSpeed = 0.1;
 static float diagonalMovementMultiplier = 0.707107;
-static int curWorldX, curWorldY; // Trenutna pozicija lika u world-space-u
-static int curMatX, curMatY;  // Trenutna pozicija lika u matrici
-static GLdouble objWinX, objWinY, objWinZ;
-static bool keyBuffer[128];     
+static int curWorldX, curWorldY; // Trenutna pozicija lika u worldspace-u.
+static int curMatX, curMatY;  // Trenutna pozicija lika u matrici.
+static GLdouble objWinX, objWinY, objWinZ; // Trenutna pozicija lika na ekranu.
 static int currentRotationX, currentRotationY;
 
 /*DISPLAY FUNCTIONS*/
@@ -74,14 +83,17 @@ static void greska(char* text);
 static void DecLevelInit();
 static void DecTest();
 
-static bool movementEnabled = false;
 static bool shootingEnabled = false;
 static bool enemiesEnabled = false;
-static void characterMovement();
 static void characterShoot();
-// static int shoot = 0;
+
 
 /*MOVEMENT FUNCTIONS*/
+/*
+ * Za kretanje se koristi keyBuffer[i], gde i predstavlja ascii vrednost dugmeta na koja su kretanje bindovana.
+ * Dok je dugme pritisnuto, keyBuffer[i] je true, false u suprotnom.
+ */
+static bool keyBuffer[128];   
 static void moveLeft();
 static void moveRight();
 static void moveUp();
@@ -90,6 +102,10 @@ static void moveUpLeft();
 static void moveUpRight();
 static void moveDownLeft();
 static void moveDownRight();
+static void characterMovement();
+static bool movementEnabled = false;
+static float colisionRange; // Ova promenljiva sluzi uzima u obzir precnik lika i odredjuje distancu lika od prepreke na kojoj se javlja kolizija.
+
 
 static void on_keyPress(unsigned char key, int x, int y);
 static void on_keyRelease(unsigned char key, int x, int y);
@@ -123,7 +139,7 @@ typedef struct{
     float bulletVelocity;
 } bullet;
 static bullet bullets[MAX_BULLETS_ON_SCREEN];
-static int bulletDmg = 5;
+static const int bulletDmg = 5;
 
 static int bulletTracker = 0;
 static const float maxBulletVelocity = 30.0;
@@ -173,33 +189,34 @@ int main(int argc, char **argv)
     glutInitWindowPosition(100, 100);
     glutCreateWindow("TDSS - Lvl 1");
     
-    if (gameMode){
-        glutGameModeString("1600x900:32@60");
-        if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE)){
-            window_width = 1600;
-            window_height = 900;
+
+    glutGameModeString("1600x900:32@60");
+    if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE)){
+        window_width = 1600;
+        window_height = 900;
+        if (gameMode)
             glutEnterGameMode();
+    }
+    else
+    {
+        glutGameModeString("1920x1080:32@60");
+        if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE)){
+            window_width = 1920;
+            window_height = 1080;
+            if (gameMode)
+                glutEnterGameMode();
         }
         else
         {
-            glutGameModeString("1920x1080:32@60");
+            glutGameModeString("1366x768:32@60");
             if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE)){
-                window_width = 1920;
-                window_height = 1080;
-                glutEnterGameMode();
-            }
-            else
-            {
-                glutGameModeString("1366x768:32@60");
-                if (glutGameModeGet(GLUT_GAME_MODE_POSSIBLE)){
-                    window_width = 1366;
-                    window_height = 768;
+                window_width = 1366;
+                window_height = 768;
+                if (gameMode)
                     glutEnterGameMode();
-                }
             }
         }
     }
-    
     /*Kursor se menja u ikonicu nisana*/
     glutSetCursor(GLUT_CURSOR_CROSSHAIR);
  
@@ -227,6 +244,7 @@ int main(int argc, char **argv)
     glLightModelfv(GL_LIGHT_MODEL_AMBIENT, model_ambient);
     
     /*Inicijalizacija nekih parametara*/
+    glutReshapeWindow(window_width, window_height);
     DecLevelInit();
     bulletInit();
     enemyInit();
@@ -262,7 +280,7 @@ static void on_display(void){
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
-    gluLookAt(0, (matrixSizeX+matrixSizeY)/0.8, (matrixSizeX+matrixSizeY)/2.8, //Sa pozicijom kamere se jos uvek igram
+    gluLookAt(0, (matrixSizeX+matrixSizeY)/0.8, (matrixSizeX+matrixSizeY)/2.8, 
               0, 0, 0, 
               0, 1, 0);
     
@@ -541,11 +559,10 @@ static void moveDownRight(){
 
 
 //-------------------------K O N T R O L A   K R E T A N J A-------------------------
-/*Ovde ima puno koda, pokriva svaki slucaj kolizije glavnog lika i terena, radi bez obzira na dimenzije terena*/
+/*Ovde ima puno koda, pokriva svaki slucaj kolizije glavnog lika i terena, radi bez obzira na dimenzije terena.
+  Uzima u obzir precnik lika i ima posebne provere za odnos pozicija lika sa preprekama za dijagonalno i pravolinijsko kretanje. Kako je najveci deo koda 
+  samo razmatranje slucajeva, ne bih se udubljivao u objasnjavanje previse. */
 void characterMovement(){
-    
-    int wa, wd;
-    float localX, localY;
     
     /*Racunanje koordinata polja u kojem se nalazimo u prostoru:*/
     /*Za X osu*/
@@ -567,7 +584,10 @@ void characterMovement(){
     curMatX = curWorldX/2 + matrixSizeX/2;
     curMatY = curWorldY/2 + matrixSizeY/2;
     
-    /*Izracunavanje za slucaj kada dijagonalno prilazimo prepreci, pa treba odluciti na koju ce nas stranu skrenuti*/
+    /*Izracunavanje za slucaj kada dijagonalno prilazimo prepreci, pa treba odluciti na koju ce nas stranu skrenuti. Gleda se da li se nalazimo u gornjem ili donjem trouglu polja u kojem smo, i skrece se na osnovu toga.*/
+    int wa, wd; 
+    float localX, localY;
+    
     localX = fmod(movementVector[0] + 1.0, 2);
     if (localX < 0.0) localX = 2.0 + localX;
     localY = fmod((1.0 - movementVector[2]), 2);
@@ -598,26 +618,26 @@ void characterMovement(){
         if (curMatX-1 >= 0 && curMatY-1 >= 0){
             if (M[curMatX-1][curMatY] == 1){
                 if ((M[curMatX][curMatY-1] == 1 && M[curMatX-1][curMatY-1] == 1) || (M[curMatX][curMatY-1] == 1 && M[curMatX-1][curMatY-1] == 0)){
-                    if (movementVector[0] > curWorldX - 0.4 && movementVector[2] > curWorldY - 0.4)
+                    if (movementVector[0] > curWorldX - colisionRange && movementVector[2] > curWorldY - colisionRange)
                         moveUpLeft();
-                    else if (movementVector[0] <= curWorldX - 0.4 && movementVector[2] > curWorldY - 0.4)
+                    else if (movementVector[0] <= curWorldX - colisionRange && movementVector[2] > curWorldY - colisionRange)
                         moveUp();
-                    else if (movementVector[0] > curWorldX - 0.4 && movementVector[2] <= curWorldY - 0.4)
+                    else if (movementVector[0] > curWorldX - colisionRange && movementVector[2] <= curWorldY - colisionRange)
                         moveLeft();
                     }
                     else {
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveUpLeft();
                         else moveUp();
                     }
                 }
                 else if (M[curMatX][curMatY-1] == 1){
-                    if (movementVector[2] > curWorldY - 0.4)
+                    if (movementVector[2] > curWorldY - colisionRange)
                         moveUpLeft();
                     else moveLeft();
                 }
                 else if (M[curMatX-1][curMatY-1] == 1){
-                    if (!(movementVector[0] < curWorldX - 0.4 && movementVector[2] < curWorldY - 0.4))
+                    if (!(movementVector[0] < curWorldX - colisionRange && movementVector[2] < curWorldY - colisionRange))
                         moveUpLeft();
                     else {
                         if (wa == 1) moveUp();
@@ -629,7 +649,7 @@ void characterMovement(){
         else {
             if (curMatX-1 < 0){
                 if (M[curMatX][curMatY-1] == 1){
-                        if (movementVector[2] > curWorldY - 0.4)
+                        if (movementVector[2] > curWorldY - colisionRange)
                             moveUpLeft();
                         else moveLeft();
                 }
@@ -637,7 +657,7 @@ void characterMovement(){
             }
             else if (curMatY-1 < 0){ 
                 if (M[curMatX-1][curMatY] == 1){
-                    if (movementVector[0] > curWorldX - 0.4)
+                    if (movementVector[0] > curWorldX - colisionRange)
                         moveUpLeft();
                     else moveUp();
                 }
@@ -652,27 +672,27 @@ void characterMovement(){
         if (curMatX+1 < matrixSizeX && curMatY-1 >= 0){
             if (M[curMatX+1][curMatY] == 1){
                 if ((M[curMatX][curMatY-1] == 1 && M[curMatX+1][curMatY-1] == 1) || (M[curMatX][curMatY-1] == 1 && M[curMatX+1][curMatY-1] == 0)){
-                    if (movementVector[0] < curWorldX + 0.4 && movementVector[2] > curWorldY - 0.4)
+                    if (movementVector[0] < curWorldX + colisionRange && movementVector[2] > curWorldY - colisionRange)
                         moveUpRight();
-                    else if (movementVector[0] >= curWorldX + 0.4 && movementVector[2] > curWorldY - 0.4)
+                    else if (movementVector[0] >= curWorldX + colisionRange && movementVector[2] > curWorldY - colisionRange)
                         moveUp();
-                    else if (movementVector[0] < curWorldX + 0.4 && movementVector[2] <= curWorldY - 0.4)
+                    else if (movementVector[0] < curWorldX + colisionRange && movementVector[2] <= curWorldY - colisionRange)
                         moveRight();
                     }
                     else {
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveUpRight();
                         else moveUp();
                     }
                 }
                 else if (M[curMatX][curMatY-1] == 1){
-                    if (movementVector[2] > curWorldY - 0.4)
+                    if (movementVector[2] > curWorldY - colisionRange)
                         moveUpRight();
                     else moveRight();
                 }
                 else if (M[curMatX+1][curMatY-1] == 1){
                     
-                    if (!(movementVector[0] > curWorldX + 0.4 && movementVector[2] < curWorldY - 0.4))
+                    if (!(movementVector[0] > curWorldX + colisionRange && movementVector[2] < curWorldY - colisionRange))
                         moveUpRight();
                     else {
                         if (wd == 1) moveUp();
@@ -684,7 +704,7 @@ void characterMovement(){
         else {
             if (curMatX + 1 >= matrixSizeX){
                 if (M[curMatX][curMatY-1] == 1){
-                    if (movementVector[2] > curWorldY - 0.4)
+                    if (movementVector[2] > curWorldY - colisionRange)
                         moveUpRight();
                     else moveRight();
                 }
@@ -692,7 +712,7 @@ void characterMovement(){
             } 
             else if (curMatY - 1 < 0){
                 if (M[curMatX+1][curMatY] == 1) {
-                    if (movementVector[0] < curWorldX + 0.4)
+                    if (movementVector[0] < curWorldX + colisionRange)
                         moveUpRight();
                     else moveUp();
                 }
@@ -707,26 +727,26 @@ void characterMovement(){
         if (curMatX-1 >= 0 && curMatY+1 < matrixSizeY){
             if (M[curMatX-1][curMatY] == 1){
                 if ((M[curMatX][curMatY+1] == 1 && M[curMatX-1][curMatY+1] == 1) || (M[curMatX][curMatY+1] == 1 && M[curMatX-1][curMatY+1] == 0)){
-                    if (movementVector[0] > curWorldX - 0.4 && movementVector[2] < curWorldY + 0.4)
+                    if (movementVector[0] > curWorldX - colisionRange && movementVector[2] < curWorldY + colisionRange)
                         moveDownLeft();
-                    else if (movementVector[0] <= curWorldX - 0.4 && movementVector[2] < curWorldY + 0.4)
+                    else if (movementVector[0] <= curWorldX - colisionRange && movementVector[2] < curWorldY + colisionRange)
                         moveDown();
-                    else if (movementVector[0] > curWorldX - 0.4 && movementVector[2] >= curWorldY - 0.4)
+                    else if (movementVector[0] > curWorldX - colisionRange && movementVector[2] >= curWorldY - colisionRange)
                         moveLeft();
                     }
                     else {
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveDownLeft();
                         else moveDown();
                     }
                 }
                 else if (M[curMatX][curMatY+1] == 1){
-                    if (movementVector[2] < curWorldY + 0.4)
+                    if (movementVector[2] < curWorldY + colisionRange)
                         moveDownLeft();
                     else moveLeft();
                 }
                 else if (M[curMatX-1][curMatY+1] == 1){
-                    if (!(movementVector[0] < curWorldX - 0.4 && movementVector[2] > curWorldY + 0.4))
+                    if (!(movementVector[0] < curWorldX - colisionRange && movementVector[2] > curWorldY + colisionRange))
                         moveDownLeft();
                     else {
                         if (wd == 0) moveDown();
@@ -741,7 +761,7 @@ void characterMovement(){
             }
             else if (curMatY + 1 >= matrixSizeY) {
                 if (M[curMatX-1][curMatY] == 1){
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveDownLeft();
                         else moveDown();
                 }
@@ -749,7 +769,7 @@ void characterMovement(){
             }
             else if (curMatX - 1 < 0){
                 if (M[curMatX][curMatY+1] == 1){
-                    if (movementVector[2] < curWorldY + 0.4)
+                    if (movementVector[2] < curWorldY + colisionRange)
                         moveDownLeft();
                     else moveLeft();
                 }
@@ -764,27 +784,27 @@ void characterMovement(){
         if (curMatX+1 < matrixSizeX && curMatY+1 < matrixSizeY){
             if (M[curMatX+1][curMatY] == 1){
                 if ((M[curMatX][curMatY+1] == 1 && M[curMatX+1][curMatY+1] == 1) || (M[curMatX][curMatY+1] == 1 && M[curMatX+1][curMatY+1] == 0)){
-                    if (movementVector[0] < curWorldX + 0.4 && movementVector[2] < curWorldY + 0.4)
+                    if (movementVector[0] < curWorldX + colisionRange && movementVector[2] < curWorldY + colisionRange)
                         moveDownRight();
-                    else if (movementVector[0] >= curWorldX + 0.4 && movementVector[2] < curWorldY + 0.4)
+                    else if (movementVector[0] >= curWorldX + colisionRange && movementVector[2] < curWorldY + colisionRange)
                         moveDown();
-                    else if (movementVector[0] < curWorldX + 0.4 && movementVector[2] >= curWorldY - 0.4)
+                    else if (movementVector[0] < curWorldX + colisionRange && movementVector[2] >= curWorldY - colisionRange)
                         moveRight();
                     }
                     else {
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveDownRight();
                         else moveDown();
                     }
                 }
                 else if (M[curMatX][curMatY+1] == 1){
-                    if (movementVector[2] < curWorldY + 0.4)
+                    if (movementVector[2] < curWorldY + colisionRange)
                         moveDownRight();
                     else moveRight();
                 }
                 else if (M[curMatX+1][curMatY+1] == 1){
                     
-                    if (!(movementVector[0] > curWorldX + 0.4 && movementVector[2] > curWorldY + 0.4))
+                    if (!(movementVector[0] > curWorldX + colisionRange && movementVector[2] > curWorldY + colisionRange))
                         moveDownRight();
                     else {
                         if (wa == 0) moveDown();
@@ -799,7 +819,7 @@ void characterMovement(){
             }
             else if (curMatY + 1 >= matrixSizeY) {
                 if (M[curMatX+1][curMatY] == 1){
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveDownRight();
                         else moveDown();
                 }
@@ -807,7 +827,7 @@ void characterMovement(){
             }
             else if (curMatX + 1 >= matrixSizeX){
                 if (M[curMatX][curMatY+1] == 1){
-                    if (movementVector[2] < curWorldY + 0.4)
+                    if (movementVector[2] < curWorldY + colisionRange)
                         moveDownRight();
                     else moveRight();
                 }
@@ -824,42 +844,42 @@ void characterMovement(){
             if (curMatY-1 >= 0){
                 if (curMatX-1 >= 0 && curMatX+1 < matrixSizeX){
                     if (M[curMatX][curMatY-1] == 1){
-                        if (movementVector[2] > curWorldY - 0.4)
+                        if (movementVector[2] > curWorldY - colisionRange)
                             moveUp();
                     }
                     else if (M[curMatX-1][curMatY-1] == 1 && M[curMatX+1][curMatY-1] == 1){
-                        if (movementVector[2] > curWorldY - 0.4)
+                        if (movementVector[2] > curWorldY - colisionRange)
                             moveUp();
-                        else if (movementVector[0] > curWorldX - 0.55 && movementVector[0] < curWorldX + 0.55)
+                        else if (movementVector[0] > curWorldX - colisionRange+0.15 && movementVector[0] < curWorldX + colisionRange+0.15)
                             moveUp();
                     }
                     else if (M[curMatX-1][curMatY-1] == 1){
-                        if (movementVector[2] > curWorldY - 0.4)
+                        if (movementVector[2] > curWorldY - colisionRange)
                             moveUp();
-                        else if (movementVector[0] > curWorldX - 0.55)
+                        else if (movementVector[0] > curWorldX - colisionRange+0.15)
                             moveUp();
                     }
                     else if (M[curMatX+1][curMatY-1] == 1){
-                        if (movementVector[2] > curWorldY - 0.4)
+                        if (movementVector[2] > curWorldY - colisionRange)
                             moveUp();
-                        else if (movementVector[0] < curWorldX + 0.55)
+                        else if (movementVector[0] < curWorldX + colisionRange+0.15)
                             moveUp();
                     }
                     else if (M[curMatX-1][curMatY] == 1){
-                        if (movementVector[2] > curWorldY - 0.4)
+                        if (movementVector[2] > curWorldY - colisionRange)
                             moveUp();
-                        else if (movementVector[0] > curWorldX - 0.55)
+                        else if (movementVector[0] > curWorldX - colisionRange+0.15)
                             moveUp();
                     }
                     else if (M[curMatX+1][curMatY] == 1){
-                        if (movementVector[2] > curWorldY - 0.4)
+                        if (movementVector[2] > curWorldY - colisionRange)
                             moveUp();
-                        else if (movementVector[0] < curWorldX + 0.55)
+                        else if (movementVector[0] < curWorldX + colisionRange+0.15)
                             moveUp();
                     }
                     else moveUp();
                 } else if (M[curMatX][curMatY-1] == 1){
-                        if (movementVector[2] > curWorldY - 0.4)
+                        if (movementVector[2] > curWorldY - colisionRange)
                             moveUp();
                 }
                 else moveUp();
@@ -871,42 +891,42 @@ void characterMovement(){
             if (curMatX-1 >= 0){
                 if (curMatY-1 >= 0 && curMatY+1 < matrixSizeY){
                     if (M[curMatX-1][curMatY] == 1){
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveLeft();
                     }
                     else if (M[curMatX-1][curMatY-1] == 1 && M[curMatX-1][curMatY+1] == 1){
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveLeft();
-                        else if (movementVector[2] > curWorldY - 0.55 && movementVector[2] < curWorldY + 0.55)
+                        else if (movementVector[2] > curWorldY - colisionRange+0.15 && movementVector[2] < curWorldY + colisionRange+0.15)
                             moveLeft();
                     }
                     else if (M[curMatX-1][curMatY-1] == 1){
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveLeft();
-                        else if (movementVector[2] > curWorldY - 0.55)
+                        else if (movementVector[2] > curWorldY - colisionRange+0.15)
                             moveLeft();
                     }
                     else if (M[curMatX-1][curMatY+1] == 1){
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveLeft();
-                        else if (movementVector[2] < curWorldY + 0.55)
+                        else if (movementVector[2] < curWorldY + colisionRange+0.15)
                             moveLeft();
                     }
                     else if (M[curMatX][curMatY-1] == 1){
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveLeft();
-                        else if (movementVector[2] > curWorldY - 0.55)
+                        else if (movementVector[2] > curWorldY - colisionRange+0.15)
                             moveLeft();
                     }
                     else if (M[curMatX][curMatY+1] == 1){
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveLeft();
-                        else if (movementVector[2] < curWorldY + 0.55)
+                        else if (movementVector[2] < curWorldY + colisionRange+0.15)
                             moveLeft();
                     }
                     else moveLeft();
                 } else if (M[curMatX-1][curMatY] == 1){
-                        if (movementVector[0] > curWorldX - 0.4)
+                        if (movementVector[0] > curWorldX - colisionRange)
                             moveLeft();
                 }
                 else moveLeft();
@@ -918,42 +938,42 @@ void characterMovement(){
             if (curMatY+1 < matrixSizeY){
                 if (curMatX-1 >= 0 && curMatX+1 < matrixSizeX){
                     if (M[curMatX][curMatY+1] == 1){
-                        if (movementVector[2] < curWorldY + 0.4)
+                        if (movementVector[2] < curWorldY + colisionRange)
                             moveDown();
                     }
                     else if (M[curMatX-1][curMatY+1] == 1 && M[curMatX+1][curMatY+1] == 1){
-                        if (movementVector[2] < curWorldY + 0.4)
+                        if (movementVector[2] < curWorldY + colisionRange)
                             moveDown();
-                        else if (movementVector[0] > curWorldX - 0.55 && movementVector[0] < curWorldX + 0.55)
+                        else if (movementVector[0] > curWorldX - colisionRange+0.15 && movementVector[0] < curWorldX + colisionRange+0.15)
                             moveDown();
                     }
                     else if (M[curMatX-1][curMatY+1] == 1){
-                        if (movementVector[2] < curWorldY + 0.4)
+                        if (movementVector[2] < curWorldY + colisionRange)
                             moveDown();
-                        else if (movementVector[0] > curWorldX - 0.55)
+                        else if (movementVector[0] > curWorldX - colisionRange+0.15)
                             moveDown();
                     }
                     else if (M[curMatX+1][curMatY+1] == 1){
-                        if (movementVector[2] < curWorldY + 0.4)
+                        if (movementVector[2] < curWorldY + colisionRange)
                             moveDown();
-                        else if (movementVector[0] < curWorldX + 0.55)
+                        else if (movementVector[0] < curWorldX + colisionRange+0.15)
                             moveDown();
                     }
                     else if (M[curMatX-1][curMatY] == 1){
-                        if (movementVector[2] < curWorldY + 0.4)
+                        if (movementVector[2] < curWorldY + colisionRange)
                             moveDown();
-                        else if (movementVector[0] > curWorldX - 0.55)
+                        else if (movementVector[0] > curWorldX - colisionRange+0.15)
                             moveDown();
                     }
                     else if (M[curMatX+1][curMatY] == 1){
-                        if (movementVector[2] < curWorldY + 0.4)
+                        if (movementVector[2] < curWorldY + colisionRange)
                             moveDown();
-                        else if (movementVector[0] < curWorldX + 0.55)
+                        else if (movementVector[0] < curWorldX + colisionRange+0.15)
                             moveDown();
                     }
                     else moveDown();
                 } else if (M[curMatX][curMatY+1] == 1){
-                        if (movementVector[2] < curWorldY + 0.4)
+                        if (movementVector[2] < curWorldY + colisionRange)
                             moveDown();
                 }
                 else moveDown();
@@ -965,42 +985,42 @@ void characterMovement(){
             if (curMatX+1 < matrixSizeX){
                 if (curMatY-1 >= 0 && curMatY+1 < matrixSizeY){
                     if (M[curMatX+1][curMatY] == 1){
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveRight();
                     }
                     else if (M[curMatX+1][curMatY-1] == 1 && M[curMatX+1][curMatY+1] == 1){
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveRight();
-                        else if (movementVector[2] > curWorldY - 0.55 && movementVector[2] < curWorldY + 0.55)
+                        else if (movementVector[2] > curWorldY - colisionRange+0.15 && movementVector[2] < curWorldY + colisionRange+0.15)
                             moveRight();
                     }
                     else if (M[curMatX+1][curMatY-1] == 1){
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveRight();
-                        else if (movementVector[2] > curWorldY - 0.55)
+                        else if (movementVector[2] > curWorldY - colisionRange+0.15)
                             moveRight();
                     }
                     else if (M[curMatX+1][curMatY+1] == 1){
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveRight();
-                        else if (movementVector[2] < curWorldY + 0.55)
+                        else if (movementVector[2] < curWorldY + colisionRange+0.15)
                             moveRight();
                     }
                     else if (M[curMatX][curMatY-1] == 1){
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveRight();
-                        else if (movementVector[0] > curWorldX - 0.55)
+                        else if (movementVector[0] > curWorldX - colisionRange+0.15)
                             moveRight();
                     }
                     else if (M[curMatX][curMatY+1] == 1){
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveRight();
-                        else if (movementVector[2] < curWorldY + 0.55)
+                        else if (movementVector[2] < curWorldY + colisionRange+0.15)
                             moveRight();
                     }
                     else moveRight();
                 } else if (M[curMatX+1][curMatY] == 1){
-                        if (movementVector[0] < curWorldX + 0.4)
+                        if (movementVector[0] < curWorldX + colisionRange)
                             moveRight();
                 }
                 else moveRight();
@@ -1270,9 +1290,9 @@ static void displayScore(){
     glEnable(GL_BLEND);
     glEnable(GL_LINE_SMOOTH);
     glDisable(GL_LIGHTING);
-    glColor3f(0,0,0);
-    output(1.5, 23.5, enemiesKilledStr);
-    output(-5, 23.5, playerLives);
+    glColor3f(0.4, 0, 0);
+    output(1.5, gPlaneScaleY/1.32, enemiesKilledStr);
+    output(-5, gPlaneScaleY/1.32, playerLives);
     glEnable(GL_LIGHTING);
     glDisable(GL_BLEND);
     glDisable(GL_LINE_SMOOTH);
@@ -1288,9 +1308,9 @@ static void displayText(GLfloat x, GLfloat y, GLfloat z, char* text, GLfloat sca
             glScalef(scale, scale, scale);
             glLineWidth(3.0);
             output(0, 3, text);
-            glEnable(GL_LIGHTING);
-            glDisable(GL_BLEND);
             glDisable(GL_LINE_SMOOTH);
+            glDisable(GL_BLEND);
+            glEnable(GL_LIGHTING);
         glPopMatrix();
 }
 
@@ -1299,6 +1319,8 @@ static void displayText(GLfloat x, GLfloat y, GLfloat z, char* text, GLfloat sca
 static void DecLevelInit(){
     tempX = window_width/2; 
     tempY = window_height/2;
+    
+    colisionRange = 1 - characterDiameter;
     
     /*Odredjivanje dimenzija matrice na osnovu velicine terena*/
     matrixSizeX = (gPlaneScaleX/2);
